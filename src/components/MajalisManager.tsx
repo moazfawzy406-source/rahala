@@ -2567,11 +2567,15 @@ export function MajalisView({
   user,
   controller,
   onToast,
+  theaterMode = false,
+  onToggleTheaterMode,
 }: {
   config: AppPublicConfig;
   user: AuthUser;
   controller: MajalisController;
   onToast: (msg: string, isError?: boolean) => void;
+  theaterMode?: boolean;
+  onToggleTheaterMode?: () => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [newRoomTitle, setNewRoomTitle] = useState('');
@@ -2597,6 +2601,38 @@ export function MajalisView({
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Google Meet-style keyboard shortcuts while active in a room (M mic, V cam, H hand, Esc menus/theater)
+  useEffect(() => {
+    if (!controller.joined) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'm' && config.meetingMode === 'builtin') {
+        e.preventDefault();
+        void controller.toggleMic();
+      } else if (key === 'v' && config.meetingMode === 'builtin') {
+        e.preventDefault();
+        void controller.toggleCam();
+      } else if (key === 'h') {
+        e.preventDefault();
+        controller.toggleHandRaise();
+      } else if (e.key === 'Escape') {
+        setReactionsMenuOpen(false);
+        setLeaveMenuOpen(false);
+        if (theaterMode && onToggleTheaterMode) {
+          onToggleTheaterMode();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [controller, config.meetingMode, theaterMode, onToggleTheaterMode]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -2700,7 +2736,7 @@ export function MajalisView({
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl sm:text-2xl font-extrabold text-[var(--text-primary)]">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--text-primary)] leading-tight">
               مجالس المذاكرة الجماعية
             </h1>
             <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-0.5">
@@ -3131,6 +3167,30 @@ export function MajalisView({
             >
               <Icons.Link className="w-4 h-4 text-[var(--accent)]" />
               <span className="hidden sm:inline">رابط الدعوة</span>
+            </button>
+          )}
+
+          {/* Theater / Focus Mode Toggle */}
+          {onToggleTheaterMode && (
+            <button
+              type="button"
+              onClick={onToggleTheaterMode}
+              aria-pressed={theaterMode}
+              title={theaterMode ? 'إظهار قوائم المنصة' : 'وضع التركيز الكامل'}
+              className={`min-h-[40px] px-3 rounded-xl border text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                theaterMode
+                  ? 'bg-[var(--accent)] border-transparent text-[var(--accent-fg)]'
+                  : 'bg-[var(--bg-surface)] border-[var(--divider)] hover:border-[var(--accent)] text-[var(--text-primary)]'
+              }`}
+            >
+              {theaterMode ? (
+                <Icons.Minimize className="w-4 h-4" />
+              ) : (
+                <Icons.Maximize className="w-4 h-4 text-[var(--accent)]" />
+              )}
+              <span className="hidden md:inline">
+                {theaterMode ? 'إظهار القوائم' : 'وضع التركيز'}
+              </span>
             </button>
           )}
         </div>

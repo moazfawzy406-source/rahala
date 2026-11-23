@@ -21,7 +21,7 @@ import type {
 import { ApiError, apiRequest } from '../lib/api';
 import { Icons } from './Icons';
 import { StudyChallengesSection } from './StudyChallengesSection';
-import { EmptyState, ErrorRetryPanel } from './UI';
+import { DashboardSkeleton, EmptyState, ErrorRetryPanel } from './UI';
 
 type TimeRange = 'weekly' | 'monthly';
 type MetricView = 'both' | 'minutes' | 'rate';
@@ -562,7 +562,7 @@ export function DashboardView({
       {/* Header Row + Weekly / Monthly Segmented Toggle */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-extrabold text-[var(--text-primary)]">
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--text-primary)] leading-tight">
             لوحة إنجاز المذاكرة
           </h1>
           <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-[var(--text-secondary)] mt-0.5">
@@ -644,7 +644,7 @@ export function DashboardView({
             <div className="text-xl sm:text-2xl font-extrabold text-[var(--accent)] mt-1.5 tabular-nums">
               {formatDurationMinutes(summary.totalCompletedMinutes)}
             </div>
-            <div className="text-[11px] text-[var(--text-secondary)] mt-1 tabular-nums">
+            <div className="text-xs text-[var(--text-secondary)] mt-1 tabular-nums">
               {summary.activeDaysCount} أيام مذاكرة مكتملة
             </div>
           </div>
@@ -656,7 +656,7 @@ export function DashboardView({
             <div className="text-xl sm:text-2xl font-extrabold text-[var(--success)] mt-1.5 tabular-nums">
               {summary.overallCompletionRate}%
             </div>
-            <div className="text-[11px] text-[var(--text-secondary)] mt-1">
+            <div className="text-xs text-[var(--text-secondary)] mt-1">
               خلال {windowLabel}
             </div>
           </div>
@@ -668,7 +668,7 @@ export function DashboardView({
             <div className="text-xl sm:text-2xl font-extrabold text-[var(--text-primary)] mt-1.5 tabular-nums">
               {summary.totalCompletedCount} / {summary.totalRemindersCount}
             </div>
-            <div className="text-[11px] text-[var(--text-secondary)] mt-1">
+            <div className="text-xs text-[var(--text-secondary)] mt-1">
               منبهات الفترة المحددة
             </div>
           </div>
@@ -680,7 +680,7 @@ export function DashboardView({
             <div className="text-base sm:text-lg font-extrabold text-[var(--text-primary)] mt-2 truncate">
               {summary.topSubject}
             </div>
-            <div className="text-[11px] text-[var(--text-secondary)] mt-1">
+            <div className="text-xs text-[var(--text-secondary)] mt-1">
               الأعلى في {windowLabel}
             </div>
           </div>
@@ -689,14 +689,7 @@ export function DashboardView({
 
       {/* Main Charts or Loading / Error / Empty States */}
       {loading ? (
-        <div className="space-y-6">
-          <div className="rahhala-card p-5 sm:p-6">
-            <div className="h-[320px] rounded-2xl bg-[var(--bg-surface)]/50 animate-pulse" />
-          </div>
-          <div className="rahhala-card p-5 sm:p-6">
-            <div className="h-[320px] rounded-2xl bg-[var(--bg-surface)]/50 animate-pulse" />
-          </div>
-        </div>
+        <DashboardSkeleton />
       ) : error ? (
         <section className="rahhala-card p-5 sm:p-6">
           <ErrorRetryPanel message={error} onRetry={loadSubjects} />
@@ -737,8 +730,9 @@ export function DashboardView({
         </section>
       ) : (
         <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-stretch">
           {/* 24-Hour Peak Study Hours Smooth Recharts Curve */}
-          <section className="rahhala-card p-5 sm:p-6">
+          <section className="rahhala-card p-5 sm:p-6 flex flex-col justify-between">
             <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-base font-extrabold text-[var(--text-primary)] flex items-center gap-2">
@@ -906,7 +900,7 @@ export function DashboardView({
 
           {/* Chronological Study Habit Trend Chart (Weekly Daily vs Monthly Multi-Week) */}
           {hasWindowReminders && (
-            <section className="rahhala-card p-5 sm:p-6">
+            <section className="rahhala-card p-5 sm:p-6 flex flex-col justify-between">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
                   <h2 className="text-base font-extrabold text-[var(--text-primary)]">
@@ -987,6 +981,7 @@ export function DashboardView({
               </div>
             </section>
           )}
+          </div>
 
           {/* Per-Subject Recharts Visualization Card */}
           {hasWindowReminders && (

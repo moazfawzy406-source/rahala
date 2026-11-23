@@ -4,6 +4,7 @@ import type {
   AuthUser,
   MaterialKind,
   MaterialRecord,
+  MaterialSearchResult,
   SectionRecord,
   StudyReminderRecord,
   SubjectRecord,
@@ -12,7 +13,22 @@ import { formatRemainingCountdown } from '../hooks/useStudyReminders';
 import { ApiError, apiRequest } from '../lib/api';
 import { MATERIAL_KIND_LABELS } from '../lib/formatters';
 import { Icons, SubjectIcon } from './Icons';
-import { ConfirmDialog, EmptyState, ErrorRetryPanel, ModalShell } from './UI';
+import { ConfirmDialog, EmptyState, ErrorRetryPanel, ModalShell, SubjectGridSkeleton } from './UI';
+
+function renderMaterialKindIcon(kind: MaterialKind) {
+  switch (kind) {
+    case 'pdf':
+      return <Icons.FileText className="w-4 h-4 text-[var(--accent)] shrink-0" />;
+    case 'video':
+      return <Icons.Play className="w-4 h-4 text-[var(--success)] shrink-0" />;
+    case 'doc':
+      return <Icons.BookOpen className="w-4 h-4 text-[var(--accent)] shrink-0" />;
+    case 'telegram':
+      return <Icons.Send className="w-4 h-4 text-[var(--accent)] shrink-0" />;
+    default:
+      return <Icons.Link className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />;
+  }
+}
 
 export function HomeAndSubjects({
   user,
@@ -45,6 +61,36 @@ export function HomeAndSubjects({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [materialSearchResults, setMaterialSearchResults] = useState<MaterialSearchResult[]>([]);
+  const [materialSearchLoading, setMaterialSearchLoading] = useState(false);
+
+  const lastStudyStorageKey = `rahhala:last_study:${user.id}`;
+  const [lastStudy, setLastStudy] = useState<{
+    subjectId: string;
+    subjectName: string;
+    materialTitle?: string;
+    visitedAt: number;
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem(`rahhala:last_study:${user.id}`);
+      return raw ? (JSON.parse(raw) as { subjectId: string; subjectName: string; materialTitle?: string; visitedAt: number }) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const rememberStudyVisit = useCallback(
+    (subjectId: string, subjectName: string, materialTitle?: string) => {
+      const entry = { subjectId, subjectName, materialTitle, visitedAt: Date.now() };
+      setLastStudy(entry);
+      try {
+        localStorage.setItem(lastStudyStorageKey, JSON.stringify(entry));
+      } catch {
+        // ignore storage quota
+      }
+    },
+    [lastStudyStorageKey]
+  );
 
   // Subject detail state
   const [subjectDetail, setSubjectDetail] = useState<{
@@ -94,12 +140,13 @@ export function HomeAndSubjects({
         `/api/resources/subjects/${encodeURIComponent(id)}`
       );
       setSubjectDetail(res);
+      rememberStudyVisit(res.subject.id, res.subject.name);
     } catch (err) {
       setDetailError(err instanceof ApiError ? err.message : 'تعذر تحميل محتوى المادة');
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [rememberStudyVisit]);
 
   useEffect(() => {
     void loadSubjects();
@@ -112,6 +159,26 @@ export function HomeAndSubjects({
       setSubjectDetail(null);
     }
   }, [selectedSubjectId, loadSubjectDetail, refreshTrigger]);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) {
+      setMaterialSearchResults([]);
+      setMaterialSearchLoading(false);
+      return;
+    }
+    setMaterialSearchLoading(true);
+    const id = window.setTimeout(() => {
+      apiRequest<{ results: MaterialSearchResult[] }>(
+        `/api/resources/search?q=${encodeURIComponent(q)}`,
+        { background: true }
+      )
+        .then((res) => setMaterialSearchResults(res.results))
+        .catch(() => setMaterialSearchResults([]))
+        .finally(() => setMaterialSearchLoading(false));
+    }, 200);
+    return () => window.clearTimeout(id);
+  }, [search]);
 
   const filteredSubjects = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -369,22 +436,35 @@ export function HomeAndSubjects({
                                   href={m.url}
                                   target="_blank"
                                   rel="noopener noreferrer nofollow"
-                                  className="flex-1 min-w-0 group"
+                                  onClick={() =>
+                                    subjectDetail &&
+                                    rememberStudyVisit(
+                                      subjectDetail.subject.id,
+                                      subjectDetail.subject.name,
+                                      m.title
+                                    )
+                                  }
+                                  className="flex-1 min-w-0 group flex items-start gap-3"
                                 >
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-bold text-sm text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors break-words">
-                                      {m.title}
-                                    </span>
-                                    <Icons.ExternalLink className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)] mt-1">
-                                    <span>{MATERIAL_KIND_LABELS[m.kind]}</span>
-                                    {m.note && (
-                                      <>
-                                        <span aria-hidden="true">·</span>
-                                        <span className="break-words">{m.note}</span>
-                                      </>
-                                    )}
+                                  <span className="w-9 h-9 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] flex items-center justify-center shrink-0 mt-0.5">
+                                    {renderMaterialKindIcon(m.kind)}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-sm text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors break-words">
+                                        {m.title}
+                                      </span>
+                                      <Icons.ExternalLink className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)] mt-1">
+                                      <span>{MATERIAL_KIND_LABELS[m.kind]}</span>
+                                      {m.note && (
+                                        <>
+                                          <span aria-hidden="true">·</span>
+                                          <span className="break-words">{m.note}</span>
+                                        </>
+                                      )}
+                                    </div>
                                   </div>
                                 </a>
 
@@ -674,21 +754,21 @@ export function HomeAndSubjects({
         />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl sm:text-2xl font-extrabold text-[var(--text-primary)]">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--text-primary)] leading-tight">
               أهلًا بعودتك <span className="text-[var(--accent)]">{user.displayName}</span>
             </h1>
             <p className="text-sm text-[var(--text-secondary)] mt-1">
               كل ما تحتاجه لدراستك في مكان واحد
             </p>
           </div>
-          <div className="relative w-full sm:w-72">
+          <div className="relative w-full sm:w-80">
             <Icons.Search className="w-4 h-4 text-[var(--text-secondary)] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="دوّر على مادة…"
-              aria-label="ابحث عن مادة دراسية"
+              placeholder="ابحث في المواد والملخصات…"
+              aria-label="ابحث في المواد والمحتوى الدراسي"
               className="rahhala-input w-full pr-10 pl-3.5 py-2"
             />
           </div>
@@ -814,7 +894,80 @@ export function HomeAndSubjects({
             </>
           )}
         </div>
+        {/* Resume Last Study Quick Strip */}
+        {lastStudy && subjects.some((s) => s.id === lastStudy.subjectId) && (
+          <div className="relative mt-3 pt-3 border-t border-[var(--divider)] flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Icons.BookOpen className="w-4 h-4 text-[var(--accent)] shrink-0" />
+              <span className="text-[var(--text-secondary)]">أكمل من حيث توقفت:</span>
+              <span className="font-bold text-[var(--text-primary)] truncate">
+                {lastStudy.subjectName}
+                {lastStudy.materialTitle ? ` · ${lastStudy.materialTitle}` : ''}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelectSubject(lastStudy.subjectId)}
+              className="font-bold text-[var(--accent)] hover:underline whitespace-nowrap"
+            >
+              فتح المادة
+            </button>
+          </div>
+        )}
       </motion.section>
+
+      {/* Cross-Subject Material Search Results when searching */}
+      {search.trim().length > 0 && (
+        <section aria-labelledby="material-search-heading" className="rahhala-card p-4 sm:p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 id="material-search-heading" className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
+              نتائج البحث داخل الدروس والملخصات
+            </h2>
+            <span className="text-xs text-[var(--text-secondary)] tabular-nums">
+              {materialSearchLoading ? 'جاري البحث…' : `${materialSearchResults.length} نتيجة`}
+            </span>
+          </div>
+
+          {!materialSearchLoading && materialSearchResults.length === 0 ? (
+            <p className="text-xs text-[var(--text-secondary)] py-2">
+              لا توجد ملخصات أو روابط مطابقة لعبارة «{search.trim()}».
+            </p>
+          ) : (
+            <div className="divide-y divide-[var(--divider)]">
+              {materialSearchResults.map((res) => (
+                <div key={res.id} className="py-2.5 first:pt-1 last:pb-1 flex items-center justify-between gap-3">
+                  <a
+                    href={res.url}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                    onClick={() => rememberStudyVisit(res.subjectId, res.subjectName, res.title)}
+                    className="flex items-center gap-3 min-w-0 flex-1 group"
+                  >
+                    <span className="w-9 h-9 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] flex items-center justify-center shrink-0">
+                      {renderMaterialKindIcon(res.kind)}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-[var(--text-primary)] group-hover:text-[var(--accent)] truncate">
+                        {res.title}
+                      </div>
+                      <div className="text-xs text-[var(--text-secondary)] truncate">
+                        {res.subjectName} · {res.sectionLabel} · {MATERIAL_KIND_LABELS[res.kind]}
+                      </div>
+                    </div>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => onSelectSubject(res.subjectId)}
+                    className="min-h-[38px] px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] hover:border-[var(--accent)] text-xs font-bold text-[var(--text-primary)] shrink-0 whitespace-nowrap"
+                  >
+                    فتح المادة
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Subjects Grid */}
       <section aria-labelledby="subjects-grid-heading">
@@ -831,18 +984,14 @@ export function HomeAndSubjects({
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-            {[1, 2, 3, 4].map((k) => (
-              <div key={k} className="rahhala-card h-36 animate-pulse" />
-            ))}
-          </div>
+          <SubjectGridSkeleton />
         ) : error ? (
           <ErrorRetryPanel message={error} onRetry={loadSubjects} />
         ) : filteredSubjects.length === 0 ? (
           <EmptyState
             icon={<Icons.Search className="w-6 h-6" />}
-            title={search.trim() ? 'مفيش مادة بالاسم ده' : 'لا توجد مواد مضافة بعد'}
-            subtitle={search.trim() ? 'جرّب كلمة بحث تانية' : 'سيضيف المشرف المواد قريبًا'}
+            title={search.trim() ? 'لا توجد مادة بهذا الاسم' : 'لا توجد مواد مضافة بعد'}
+            subtitle={search.trim() ? 'جرّب كلمة بحث أخرى أو راجع نتائج الدروس بالأعلى' : 'سيضيف المشرف المواد قريبًا'}
           />
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">

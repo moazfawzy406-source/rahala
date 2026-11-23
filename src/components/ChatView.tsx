@@ -29,6 +29,7 @@ import { downloadProtectedAsset } from '../lib/reliableDownload';
 import { Icons } from './Icons';
 import {
   Avatar,
+  ChatMessagesSkeleton,
   ConfirmDialog,
   EmptyState,
   ErrorRetryPanel,
@@ -248,17 +249,29 @@ function FileAttachmentCard({
     }
   };
 
+  const ext = (filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 5);
+  const extColorClass =
+    ext === 'PDF'
+      ? 'bg-[var(--error-soft)] text-[var(--error)] border-[var(--error)]/25'
+      : ext === 'DOC' || ext === 'DOCX'
+      ? 'bg-sky-500/15 text-sky-400 border-sky-400/25'
+      : ext === 'XLS' || ext === 'XLSX'
+      ? 'bg-[var(--success-soft)] text-[var(--success)] border-[var(--success)]/25'
+      : 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent)]/25';
+
   return (
     <div className="mt-1.5 p-3 rounded-xl bg-black/15 border border-[var(--divider)] max-w-xs space-y-2">
       <div className="flex items-start gap-2.5">
-        <div className="w-9 h-9 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
-          <Icons.FileText className="w-4 h-4" />
+        <div
+          className={`w-10 h-10 rounded-xl border flex flex-col items-center justify-center shrink-0 ${extColorClass}`}
+        >
+          <span className="text-[10px] font-extrabold tracking-tight leading-none">{ext}</span>
         </div>
         <div className="min-w-0 flex-1">
           <div dir="ltr" className="text-xs font-bold text-[var(--text-primary)] truncate text-left">
             {filename}
           </div>
-          <div className="text-[11px] text-[var(--text-secondary)] tabular-nums">
+          <div className="text-xs text-[var(--text-secondary)] tabular-nums">
             {formatByteSize(byteSize)}
           </div>
         </div>
@@ -1334,11 +1347,121 @@ export function ChatView({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-136px)] md:h-[calc(100dvh-96px)] max-h-[calc(100dvh-136px)] md:max-h-[calc(100dvh-96px)] rahhala-card overflow-hidden">
+    <div className="grid grid-cols-1 lg:grid-cols-[270px_minmax(0,1fr)] h-[calc(100dvh-132px)] md:h-[calc(100dvh-88px)] max-h-[calc(100dvh-132px)] md:max-h-[calc(100dvh-88px)] rahhala-card overflow-hidden">
+      {/* Desktop WhatsApp-Style Split Sidebar */}
+      <aside
+        aria-label="قنوات وأدوات المحادثة"
+        className="hidden lg:flex flex-col border-e border-[var(--divider)] bg-[var(--bg-surface)]/45 min-h-0"
+      >
+        <div className="p-3.5 border-b border-[var(--divider)]">
+          <button
+            type="button"
+            onClick={() => {
+              setGroupNameDraft(groupSettings.groupName);
+              setGroupDescDraft(groupSettings.groupDescription);
+              setGroupRulesDraft(groupSettings.groupRules);
+              setGroupSettingsOpen(true);
+            }}
+            className="w-full flex items-center gap-2.5 text-right group"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 flex items-center justify-center shrink-0">
+              <Icons.Users className="w-5 h-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="font-extrabold text-sm text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
+                {groupSettings.groupName}
+              </div>
+              <div className="text-xs text-[var(--text-secondary)] truncate">
+                إعدادات ومعلومات الجروب
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+          <div className="px-2 py-1 text-xs font-bold text-[var(--text-secondary)]">القنوات</div>
+          {CHANNELS.map((ch) => {
+            const active = channel === ch.id;
+            const unread = unreadByChannel[ch.id] || 0;
+            return (
+              <button
+                key={ch.id}
+                type="button"
+                onClick={() => {
+                  setChannel(ch.id);
+                  setSearchResults(null);
+                  setReplyTo(null);
+                  setEditingMsg(null);
+                }}
+                className={`w-full p-3 rounded-xl text-right flex items-start justify-between gap-2 transition-colors ${
+                  active
+                    ? 'bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-[var(--text-primary)]'
+                    : 'hover:bg-[var(--bg-card)]/70 border border-transparent text-[var(--text-secondary)]'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div
+                    className={`text-sm font-bold truncate ${
+                      active ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {ch.label}
+                  </div>
+                  <div className="text-xs text-[var(--text-secondary)] truncate mt-0.5">
+                    {ch.description}
+                  </div>
+                </div>
+                {unread > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)] text-xs font-extrabold flex items-center justify-center tabular-nums shrink-0">
+                    {unread}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="p-2.5 border-t border-[var(--divider)] space-y-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setChatSettingsTab('starred');
+              void loadStarredMessages();
+              setChatSettingsOpen(true);
+            }}
+            className="w-full min-h-[40px] px-3 rounded-xl hover:bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] flex items-center gap-2 transition-colors"
+          >
+            <Icons.Star className="w-4 h-4 text-[var(--accent)]" />
+            <span>الرسائل المميزة بنجمة</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenMembersAndMedia}
+            className="w-full min-h-[40px] px-3 rounded-xl hover:bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] flex items-center gap-2 transition-colors"
+          >
+            <Icons.Users className="w-4 h-4 text-[var(--accent)]" />
+            <span>الأعضاء والوسائط</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setChatSettingsTab('prefs');
+              setChatSettingsOpen(true);
+            }}
+            className="w-full min-h-[40px] px-3 rounded-xl hover:bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] flex items-center gap-2 transition-colors"
+          >
+            <Icons.Sliders className="w-4 h-4 text-[var(--accent)]" />
+            <span>إعدادات المحادثة</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Active Chat Column */}
+      <div className="flex flex-col min-h-0 min-w-0">
       {/* Chat Header & Channel Tabs */}
       <div className="shrink-0 border-b border-[var(--divider)] bg-[var(--bg-card)] px-3 sm:px-4 py-2.5 space-y-2.5">
-        {/* WhatsApp-style Group Header Strip */}
-        <div className="flex items-center justify-between gap-2 pb-2 border-b border-[var(--divider)]">
+        {/* Mobile/Tablet Group Header Strip */}
+        <div className="flex lg:hidden items-center justify-between gap-2 pb-2 border-b border-[var(--divider)]">
           <button
             type="button"
             onClick={() => {
@@ -1356,7 +1479,7 @@ export function ChatView({
               <div className="font-extrabold text-sm text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
                 {groupSettings.groupName}
               </div>
-              <div className="text-[11px] text-[var(--text-secondary)] truncate flex items-center gap-1.5">
+              <div className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1.5">
                 <span>اضغط لمعلومات وإعدادات الجروب</span>
                 {groupSettings.disappearingHours > 0 && (
                   <>
@@ -1404,7 +1527,16 @@ export function ChatView({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-surface)]">
+          <div className="hidden lg:flex items-center gap-2 min-w-0">
+            <h2 className="text-sm font-extrabold text-[var(--text-primary)] truncate">
+              {CHANNELS.find((c) => c.id === channel)?.label}
+            </h2>
+            <span className="text-xs text-[var(--text-secondary)] truncate">
+              · {CHANNELS.find((c) => c.id === channel)?.description}
+            </span>
+          </div>
+
+          <div className="flex lg:hidden items-center gap-1 p-1 rounded-xl bg-[var(--bg-surface)]">
             {CHANNELS.map((ch) => {
               const active = channel === ch.id;
               const unread = unreadByChannel[ch.id] || 0;
@@ -1612,11 +1744,7 @@ export function ChatView({
             )}
           </div>
         ) : loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((k) => (
-              <div key={k} className="h-16 rounded-2xl bg-[var(--bg-surface)] animate-pulse w-3/4" />
-            ))}
-          </div>
+          <ChatMessagesSkeleton />
         ) : error ? (
           <ErrorRetryPanel message={error} onRetry={() => loadChannel(channel, true)} />
         ) : messages.length === 0 ? (
@@ -1682,10 +1810,12 @@ export function ChatView({
                     <div
                       id={`chat-msg-${msg.id}`}
                       className={`max-w-[85%] sm:max-w-[72%] rounded-2xl px-3.5 py-2.5 border transition-colors ${
+                        isOwn ? 'rounded-se-sm bg-[var(--bubble-own)]' : 'rounded-ss-sm bg-[var(--bubble-other)]'
+                      } ${
                         highlightedMessageId === msg.id
                           ? 'border-[var(--accent)] ring-2 ring-[var(--accent-soft)]'
                           : 'border-[var(--divider)]'
-                      } ${isOwn ? 'bg-[var(--bubble-own)]' : 'bg-[var(--bubble-other)]'}`}
+                      }`}
                     >
                       <div className="flex items-center justify-between gap-3 mb-1">
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -1807,14 +1937,15 @@ export function ChatView({
           </>
         )}
 
-        {showNewMessagesJump && (
+        {(showNewMessagesJump || (!nearBottom && messages.length > 4)) && (
           <button
             type="button"
             onClick={() => scrollToBottom(true)}
+            aria-label={showNewMessagesJump ? 'الانتقال إلى الرسائل الجديدة' : 'النزول لأسفل المحادثة'}
             className="sticky bottom-2 mx-auto flex items-center gap-1.5 px-4 min-h-[40px] rounded-full bg-[var(--accent)] text-[var(--accent-fg)] text-xs font-bold shadow-lg"
           >
             <Icons.ArrowDown className="w-3.5 h-3.5" />
-            <span>رسايل جديدة</span>
+            <span>{showNewMessagesJump ? 'رسائل جديدة' : 'النزول للأسفل'}</span>
           </button>
         )}
       </div>
@@ -2104,6 +2235,7 @@ export function ChatView({
             )}
           </div>
         )}
+      </div>
       </div>
 
       {/* Message Actions Modal */}

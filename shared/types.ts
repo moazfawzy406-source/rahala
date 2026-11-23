@@ -411,3 +411,16 @@ export interface MajalisChatMessageRecord {
   body: string;
   createdAt: number;
 }
+
+export interface MaterialSearchResult {
+  id: string;
+  title: string;
+  kind: MaterialKind;
+  url: string;
+  note: string;
+  subjectId: string;
+  sectionId: string;
+  subjectName: string;
+  subjectColor: string;
+  sectionLabel: string;
+}

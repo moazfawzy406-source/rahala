@@ -328,6 +328,25 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
     const checkOrder = await member.json(`/api/resources/subjects/${subjId}`);
     expect(checkOrder.data.sections[0].materials[0].title).toBe('ثاني مضاف (يظهر أولًا)');
 
+    // Cross-subject material search: empty query, exact Arabic match, wildcard escaping
+    const emptySearch = await member.json('/api/resources/search?q=');
+    expect(emptySearch.status).toBe(200);
+    expect(emptySearch.data.results).toEqual([]);
+
+    const matSearch = await member.json(`/api/resources/search?q=${encodeURIComponent('يظهر أولًا')}`);
+    expect(matSearch.status).toBe(200);
+    expect(matSearch.data.results).toHaveLength(1);
+    expect(matSearch.data.results[0]).toMatchObject({
+      title: 'ثاني مضاف (يظهر أولًا)',
+      subjectId: subjId,
+      subjectName: 'مادة اختبارية',
+    });
+    expect(typeof matSearch.data.results[0].sectionLabel).toBe('string');
+
+    const wildcardSearch = await member.json(`/api/resources/search?q=${encodeURIComponent('%_notfound_%')}`);
+    expect(wildcardSearch.status).toBe(200);
+    expect(wildcardSearch.data.results).toEqual([]);
+
     // Non-empty section delete requires move or explicit cascade
     expect((await admin.json(`/api/resources/sections/${sec1}`, { method: 'DELETE' })).status).toBe(409);
     const moveDel = await admin.json(`/api/resources/sections/${sec1}`, {

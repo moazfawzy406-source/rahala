@@ -46,6 +46,59 @@ export function createResourcesRouter(db: RahhalaDb, config: RahhalaConfig): Rou
     });
   });
 
+  router.get('/resources/search', requireAuth, (req, res) => {
+    const rawQ = String(req.query.q ?? '').trim();
+    if (!rawQ) {
+      res.json({ results: [] });
+      return;
+    }
+    const escaped = rawQ.replace(/[\\%_]/g, (m) => `\\${m}`);
+    const likePattern = `%${escaped}%`;
+
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.title, m.kind, m.url, m.note, m.subject_id, m.section_id,
+                s.name AS subject_name, s.accent_color AS subject_color,
+                sec.label AS section_label
+         FROM materials m
+         JOIN subjects s ON s.id = m.subject_id
+         JOIN sections sec ON sec.id = m.section_id
+         WHERE m.title LIKE ? ESCAPE '\\'
+            OR m.note LIKE ? ESCAPE '\\'
+            OR s.name LIKE ? ESCAPE '\\'
+            OR sec.label LIKE ? ESCAPE '\\'
+         ORDER BY m.created_at DESC
+         LIMIT 30`
+      )
+      .all(likePattern, likePattern, likePattern, likePattern) as Array<{
+      id: string;
+      title: string;
+      kind: (typeof MATERIAL_KINDS)[number];
+      url: string;
+      note: string;
+      subject_id: string;
+      section_id: string;
+      subject_name: string;
+      subject_color: string;
+      section_label: string;
+    }>;
+
+    res.json({
+      results: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        kind: r.kind,
+        url: r.url,
+        note: r.note,
+        subjectId: r.subject_id,
+        sectionId: r.section_id,
+        subjectName: r.subject_name,
+        subjectColor: r.subject_color,
+        sectionLabel: r.section_label,
+      })),
+    });
+  });
+
   router.get('/resources/subjects/:id', requireAuth, (req, res) => {
     const subjectId = String(req.params.id);
     const subjectRow = db

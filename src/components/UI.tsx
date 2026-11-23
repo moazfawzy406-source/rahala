@@ -82,7 +82,7 @@ export function ModalShell({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-label={title}
@@ -92,24 +92,30 @@ export function ModalShell({
         >
           <motion.div
             ref={ref}
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            initial={{ opacity: 0, scale: 0.98, y: 24 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            exit={{ opacity: 0, scale: 0.98, y: 24 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className={`rahhala-glass-panel w-full ${maxWidth} max-h-[90dvh] flex flex-col overflow-hidden`}
+            className={`rahhala-glass-panel w-full ${maxWidth} max-h-[88dvh] sm:max-h-[90dvh] rounded-t-3xl sm:rounded-[22px] rounded-b-none sm:rounded-b-[22px] flex flex-col overflow-hidden`}
           >
-            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--divider)]">
-              <h2 className="text-lg font-bold text-[var(--text-primary)]">{title}</h2>
+            {/* Mobile bottom-sheet drag indicator */}
+            <div className="sm:hidden pt-2.5 pb-0.5 flex justify-center shrink-0" aria-hidden="true">
+              <span className="w-10 h-1 rounded-full bg-[var(--divider)]" />
+            </div>
+            <div className="flex items-center justify-between gap-3 px-5 py-3.5 sm:py-4 border-b border-[var(--divider)] shrink-0">
+              <h2 className="text-base sm:text-lg font-bold text-[var(--text-primary)] truncate">
+                {title}
+              </h2>
               <button
                 type="button"
                 onClick={onClose}
                 aria-label="إغلاق"
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors shrink-0"
               >
                 <Icons.X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 overflow-y-auto">{children}</div>
+            <div className="p-4 sm:p-5 overflow-y-auto safe-bottom-nav">{children}</div>
           </motion.div>
         </motion.div>
       )}
@@ -473,6 +479,80 @@ export function EmptyState({
       </div>
       <p className="font-bold text-sm text-[var(--text-primary)]">{title}</p>
       {subtitle && <p className="text-xs text-[var(--text-secondary)] mt-1.5">{subtitle}</p>}
+    </div>
+  );
+}
+
+export function SubjectGridSkeleton() {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5" aria-hidden="true">
+      {[1, 2, 3, 4].map((k) => (
+        <div
+          key={k}
+          className="rahhala-card p-4 sm:p-5 min-h-[144px] flex flex-col justify-between animate-pulse"
+        >
+          <div className="flex items-start justify-between">
+            <div className="w-11 h-11 rounded-2xl bg-[var(--bg-surface)]" />
+            <div className="w-4 h-4 rounded bg-[var(--bg-surface)]" />
+          </div>
+          <div className="space-y-2 mt-4">
+            <div className="h-4 w-3/4 rounded-md bg-[var(--bg-surface)]" />
+            <div className="h-3 w-1/2 rounded-md bg-[var(--bg-surface)]/70" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function ChatMessagesSkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse" aria-hidden="true">
+      {[
+        { own: false, w: 'w-3/5' },
+        { own: true, w: 'w-2/3' },
+        { own: false, w: 'w-1/2' },
+        { own: true, w: 'w-3/4' },
+      ].map((row, idx) => (
+        <div key={idx} className={`flex items-end gap-2 ${row.own ? 'justify-start' : 'justify-end'}`}>
+          {!row.own && <div className="w-8 h-8 rounded-full bg-[var(--bg-surface)] shrink-0" />}
+          <div className={`${row.w} rounded-2xl p-3.5 bg-[var(--bg-surface)] space-y-2`}>
+            <div className="h-3 w-24 rounded bg-[var(--bg-card)]" />
+            <div className="h-3.5 w-full rounded bg-[var(--bg-card)]/80" />
+            <div className="h-3 w-16 rounded bg-[var(--bg-card)]/60 mr-auto" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DashboardSkeleton() {
+  return (
+    <div className="space-y-6 animate-pulse" aria-hidden="true">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rahhala-card p-5 space-y-4">
+          <div className="flex justify-between">
+            <div className="space-y-2">
+              <div className="h-4 w-40 rounded bg-[var(--bg-surface)]" />
+              <div className="h-3 w-56 rounded bg-[var(--bg-surface)]/70" />
+            </div>
+            <div className="h-9 w-28 rounded-xl bg-[var(--bg-surface)]" />
+          </div>
+          <div className="h-[260px] rounded-2xl bg-[var(--bg-surface)]/65" />
+        </div>
+        <div className="rahhala-card p-5 space-y-4">
+          <div className="space-y-2">
+            <div className="h-4 w-36 rounded bg-[var(--bg-surface)]" />
+            <div className="h-3 w-48 rounded bg-[var(--bg-surface)]/70" />
+          </div>
+          <div className="h-[260px] rounded-2xl bg-[var(--bg-surface)]/65" />
+        </div>
+      </div>
+      <div className="rahhala-card p-5 space-y-3">
+        <div className="h-4 w-44 rounded bg-[var(--bg-surface)]" />
+        <div className="h-[280px] rounded-2xl bg-[var(--bg-surface)]/65" />
+      </div>
     </div>
   );
 }

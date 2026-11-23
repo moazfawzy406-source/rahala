@@ -10,6 +10,7 @@ import { AccountView } from './components/AccountView';
 import { AdminView } from './components/AdminView';
 import { AuthScreens } from './components/AuthScreens';
 import { ChatView } from './components/ChatView';
+import { CommandPalette, KeyboardShortcutsModal } from './components/CommandPalette';
 import { HomeAndSubjects } from './components/HomeAndSubjects';
 import { Icons, RahhalaBookMark } from './components/Icons';
 
@@ -80,6 +81,9 @@ export default function App() {
   const [themeModalOpen, setThemeModalOpen] = useState(false);
   const [membersModalOpen, setMembersModalOpen] = useState(false);
   const [remindersModalOpen, setRemindersModalOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [majalisTheaterMode, setMajalisTheaterMode] = useState(false);
   const [reminderSubjectId, setReminderSubjectId] = useState<string | null>(null);
   const [focusAlertSettings, setFocusAlertSettings] = useState(false);
   const [viewerImage, setViewerImage] = useState<{
@@ -268,6 +272,36 @@ export default function App() {
     }
   }, [user, isAdminOrOwner, activeTab]);
 
+  // Reset Majalis theater mode if leaving room or switching tab
+  useEffect(() => {
+    if (!majalisController.joined || activeTab !== 'majalis') {
+      setMajalisTheaterMode(false);
+    }
+  }, [majalisController.joined, activeTab]);
+
+  // Global keyboard shortcuts: Ctrl/Cmd+K for Command Palette, ? for Shortcuts Modal
+  useEffect(() => {
+    if (!user) return;
+    const onGlobalKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((o) => !o);
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === '?') {
+        e.preventDefault();
+        setShortcutsOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onGlobalKey);
+    return () => window.removeEventListener('keydown', onGlobalKey);
+  }, [user]);
+
   if (bootLoading) {
     return (
       <MotionConfig reducedMotion="user">
@@ -351,6 +385,8 @@ export default function App() {
     { id: 'account', label: 'حسابي', icon: <Icons.User className="w-5 h-5" /> },
   ];
 
+  const mobileNavItems = navItems.filter((item) => item.id !== 'account');
+
   const handleNavClick = (tab: NavTab) => {
     if (tab === 'subjects' && activeTab === 'subjects' && selectedSubjectId) {
       setSelectedSubjectId(null);
@@ -360,6 +396,8 @@ export default function App() {
 
   const reminderBadgeCount =
     studyReminders.dueAlerts.length + studyReminders.activeReminders.length;
+
+  const isTheaterActive = activeTab === 'majalis' && majalisController.joined && majalisTheaterMode;
 
   return (
     <MotionConfig reducedMotion="user">
@@ -380,6 +418,7 @@ export default function App() {
         />
 
         {/* Top Header */}
+        {!isTheaterActive && (
         <header className="sticky top-0 z-30 h-14 border-b border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             {activeTab === 'subjects' && selectedSubjectId && (
@@ -400,7 +439,7 @@ export default function App() {
                 {config.brandName}
               </div>
               {config.institutionSubtitle && (
-                <div className="text-[11px] text-[var(--text-secondary)] truncate mt-0.5 hidden sm:block">
+                <div className="text-xs text-[var(--text-secondary)] truncate mt-0.5 hidden sm:block">
                   {config.institutionSubtitle}
                 </div>
               )}
@@ -408,6 +447,22 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setCommandPaletteOpen(true)}
+              aria-label="البحث والأوامر السريعة"
+              className="min-h-[40px] px-2.5 sm:px-3 rounded-xl rahhala-glass-pill text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)] flex items-center gap-2 transition-colors"
+            >
+              <Icons.Search className="w-4 h-4 text-[var(--accent)]" />
+              <span className="hidden lg:inline text-xs font-bold">بحث سريع</span>
+              <kbd
+                dir="ltr"
+                className="hidden lg:inline px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--divider)] text-[10px] font-bold"
+              >
+                Ctrl+K
+              </kbd>
+            </button>
+
             <PWAInstallButton />
 
             <button
@@ -446,16 +501,18 @@ export default function App() {
                 <div className="text-xs font-bold text-[var(--text-primary)] truncate">
                   {user.displayName}
                 </div>
-                <div className="text-[10px] text-[var(--accent)] leading-none">
+                <div className="text-[11px] text-[var(--accent)] leading-none">
                   {ROLE_LABELS[user.role]}
                 </div>
               </div>
             </button>
           </div>
         </header>
+        )}
 
         {/* Main Shell: Desktop RTL Sidebar + Content */}
         <div className="flex-1 flex min-h-0">
+          {!isTheaterActive && (
           <aside
             aria-label="التنقل الرئيسي"
             className="hidden md:flex flex-col w-60 shrink-0 border-l border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl p-3 gap-1.5"
@@ -494,10 +551,15 @@ export default function App() {
               );
             })}
           </aside>
+          )}
 
           <main
-            className={`flex-1 min-w-0 px-3 sm:px-6 py-4 sm:py-6 max-w-6xl mx-auto w-full ${
-              activeTab === 'chat' ? 'pb-16 md:pb-6' : 'pb-24 md:pb-6'
+            className={`flex-1 min-w-0 px-3 sm:px-6 mx-auto w-full ${
+              isTheaterActive
+                ? 'max-w-[1520px] py-3 sm:py-4'
+                : activeTab === 'chat'
+                ? 'max-w-7xl py-3 sm:py-4 pb-16 md:pb-4'
+                : 'max-w-6xl py-4 sm:py-6 pb-24 md:pb-6'
             }`}
           >
             <AnimatePresence mode="wait">
@@ -553,6 +615,8 @@ export default function App() {
                     user={user}
                     controller={majalisController}
                     onToast={showToast}
+                    theaterMode={majalisTheaterMode}
+                    onToggleTheaterMode={() => setMajalisTheaterMode((v) => !v)}
                   />
                 )}
 
@@ -599,15 +663,16 @@ export default function App() {
         </div>
 
         {/* Mobile Bottom Navigation */}
+        {!isTheaterActive && (
         <nav
           aria-label="التنقل السفلي"
           className="md:hidden fixed bottom-0 left-0 right-0 z-30 border-t border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl safe-bottom-nav"
         >
         <div
           className="grid items-center h-14 px-1"
-          style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${mobileNavItems.length}, minmax(0, 1fr))` }}
         >
-          {navItems.map((item) => {
+          {mobileNavItems.map((item) => {
             const active = activeTab === item.id;
             return (
               <button
@@ -626,7 +691,7 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <span className="text-[10px] sm:text-[11px] font-bold leading-none whitespace-nowrap">
+                <span className="text-[11px] font-bold leading-none whitespace-nowrap">
                   {item.mobileLabel || item.label}
                 </span>
               </button>
@@ -634,6 +699,7 @@ export default function App() {
           })}
         </div>
       </nav>
+        )}
 
       {/* Always-mounted remote audio bridge so Majalis audio continues across tabs & listener mode */}
       <MajalisAudioBridge controller={majalisController} />
@@ -702,6 +768,22 @@ export default function App() {
         />
 
         <ImageViewerModal item={viewerImage} onClose={() => setViewerImage(null)} />
+
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          isAdminOrOwner={isAdminOrOwner}
+          onNavigateTab={setActiveTab}
+          onSelectSubject={setSelectedSubjectId}
+          onOpenReminders={() => openRemindersForSubject(selectedSubjectId)}
+          onOpenThemeModal={() => setThemeModalOpen(true)}
+          onOpenShortcuts={() => setShortcutsOpen(true)}
+        />
+
+        <KeyboardShortcutsModal
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
+        />
       </div>
     </MotionConfig>
   );
