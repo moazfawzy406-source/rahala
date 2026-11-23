@@ -2149,21 +2149,35 @@ export function ChatView({
       {(actionMsg || chatMenuOpen) && createPortal(
         <div className="fixed inset-0 z-[100]" onContextMenu={e=>e.preventDefault()} onClick={()=>{setActionMsg(null);setChatMenuOpen(false);}}>
           <div role="menu" aria-label={actionMsg?'إجراءات الرسالة':'إجراءات المحادثة'} dir="rtl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{const buttons=Array.from(e.currentTarget.querySelectorAll('button'));const i=buttons.indexOf(document.activeElement as HTMLButtonElement);if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();buttons[(i+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}if(e.key==='Home'){e.preventDefault();buttons[0]?.focus();}if(e.key==='End'){e.preventDefault();buttons.at(-1)?.focus();}}} className="fixed w-[min(300px,calc(100vw-24px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--divider)] bg-[var(--bg-card)] p-2 shadow-2xl" style={{left:Math.max(12,Math.min(menuPoint.x,window.innerWidth-312)),top:chatMenuOpen?menuPoint.y:Math.max(12,Math.min(menuPoint.y,window.innerHeight-Math.min(620,window.innerHeight-24)-12)),maxHeight:chatMenuOpen?`calc(100dvh - ${menuPoint.y+12}px)`:'min(620px,calc(100dvh - 24px))'}}>
-          {chatMenuOpen && <div className="grid gap-1 text-sm font-semibold [&>button]:min-h-[44px] [&>button]:text-right [&>button]:px-3 [&>button]:rounded-xl [&>button:hover]:bg-[var(--bg-surface)]">
-            <div className="px-3 py-2 text-xs text-[var(--text-secondary)] border-b border-[var(--divider)]">{groupSettings.groupName}</div>
-            <button onClick={()=>{setChatMenuOpen(false);setGroupNameDraft(groupSettings.groupName);setGroupDescDraft(groupSettings.groupDescription);setGroupRulesDraft(groupSettings.groupRules);setGroupSettingsOpen(true);}}>معلومات الجروب</button>
-            <button onClick={()=>{setChatMenuOpen(false);setPrivateChatsOpen(true);}}>المحادثات الخاصة</button>
-            <button onClick={()=>{setChatMenuOpen(false);setGroupsOpen(true);}}>المجتمعات والجروبات</button>
-            <button onClick={()=>{setChatMenuOpen(false);setSearchOpen(true);setSearchResults(null);}}>بحث في المحادثة</button>
-            <button onClick={()=>{setChatMenuOpen(false);onOpenMembersAndMedia();}}>الأعضاء والوسائط</button>
-            {isAdminOrOwner&&<button onClick={()=>{setChatMenuOpen(false);void handleToggleLock();}}>{chatLocked?'فتح المحادثة':'قفل المحادثة'}</button>}
-            <button onClick={()=>{setChatMenuOpen(false);const first=messages.find(m=>m.deletedAt===null);if(first)setSelectedIds([first.id]);else onToast('لا توجد رسائل لتحديدها');}}>تحديد رسائل</button>
-            <button onClick={()=>{setChatMenuOpen(false);void handleUpdateUserSettings({chatSoundsEnabled:!userSettings.chatSoundsEnabled});}}>{userSettings.chatSoundsEnabled?'كتم أصوات المحادثة':'تشغيل أصوات المحادثة'}</button>
-            <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('prefs');setChatSettingsOpen(true);}}>خلفية وإعدادات المحادثة</button>
-            <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('starred');void loadStarredMessages();setChatSettingsOpen(true);}}>الرسائل المميزة بنجمة</button>
-            <button onClick={()=>{setChatMenuOpen(false);void handleExportChannelTxt();}}>تصدير المحادثة كنص</button>
-            {isAdminOrOwner && <button className="text-[var(--error)]" onClick={()=>{setChatMenuOpen(false);setClearChannelConfirmOpen(true);}}>مسح المحادثة من شاشتي فقط</button>}
-            <button onClick={()=>{setChatMenuOpen(false);onCloseChat();}}>إغلاق المحادثة</button>
+          {chatMenuOpen && <div className="text-sm font-semibold [&_button]:min-h-[44px] [&_button]:w-full [&_button]:text-right [&_button]:px-3 [&_button]:rounded-lg [&_button:hover]:bg-[var(--bg-surface)] [&_button:focus-visible]:outline [&_button:focus-visible]:outline-2 [&_button:focus-visible]:outline-[var(--accent)]">
+            <section role="group" aria-label="التنقل" className="">
+              <h3 className="px-3 pt-2 pb-1 text-[10px] font-extrabold text-[var(--accent)]">التنقل</h3>
+              <button onClick={()=>{setChatMenuOpen(false);setPrivateChatsOpen(true);}}>المحادثات الخاصة</button>
+              <button onClick={()=>{setChatMenuOpen(false);setGroupsOpen(true);}}>المجتمعات والجروبات</button>
+            </section>
+            <section role="group" aria-label="أدوات المحادثة" className="border-t border-[var(--divider)] mt-1 pt-1">
+              <h3 className="px-3 pt-2 pb-1 text-[10px] font-extrabold text-[var(--accent)]">أدوات المحادثة</h3>
+              <button onClick={()=>{setChatMenuOpen(false);setSearchOpen(true);setSearchResults(null);}}>بحث في المحادثة</button>
+              <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('starred');void loadStarredMessages();setChatSettingsOpen(true);}}>الرسائل المميزة بنجمة</button>
+              <button onClick={()=>{setChatMenuOpen(false);const first=messages.find(m=>m.deletedAt===null);if(first)setSelectedIds([first.id]);else onToast('لا توجد رسائل لتحديدها');}}>تحديد رسائل</button>
+              <button onClick={()=>{setChatMenuOpen(false);void handleExportChannelTxt();}}>تصدير المحادثة كنص</button>
+            </section>
+            <section role="group" aria-label="الأعضاء والجروب" className="border-t border-[var(--divider)] mt-1 pt-1">
+              <h3 className="px-3 pt-2 pb-1 text-[10px] font-extrabold text-[var(--accent)]">الأعضاء والجروب</h3>
+              <button onClick={()=>{setChatMenuOpen(false);onOpenMembersAndMedia();}}>الأعضاء والوسائط</button>
+              <button onClick={()=>{setChatMenuOpen(false);setGroupNameDraft(groupSettings.groupName);setGroupDescDraft(groupSettings.groupDescription);setGroupRulesDraft(groupSettings.groupRules);setGroupSettingsOpen(true);}}>معلومات الجروب</button>
+            </section>
+            <section role="group" aria-label="الإعدادات" className="border-t border-[var(--divider)] mt-1 pt-1">
+              <h3 className="px-3 pt-2 pb-1 text-[10px] font-extrabold text-[var(--accent)]">الإعدادات</h3>
+              <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('prefs');setChatSettingsOpen(true);}}>خلفية وإعدادات المحادثة</button>
+              <button onClick={()=>{setChatMenuOpen(false);void handleUpdateUserSettings({chatSoundsEnabled:!userSettings.chatSoundsEnabled});}}>{userSettings.chatSoundsEnabled?'كتم أصوات المحادثة':'تشغيل أصوات المحادثة'}</button>
+              {isAdminOrOwner&&<button onClick={()=>{setChatMenuOpen(false);void handleToggleLock();}}>{chatLocked?'فتح المحادثة':'قفل المحادثة'}</button>}
+            </section>
+            <section role="group" aria-label="إجراءات إضافية" className="border-t border-[var(--divider)] mt-1 pt-1">
+              <h3 className="px-3 pt-2 pb-1 text-[10px] font-extrabold text-[var(--accent)]">إجراءات إضافية</h3>
+              {isAdminOrOwner && <button className="text-[var(--error)]" onClick={()=>{setChatMenuOpen(false);setClearChannelConfirmOpen(true);}}>مسح المحادثة من شاشتي فقط</button>}
+              <button onClick={()=>{setChatMenuOpen(false);onCloseChat();}}>إغلاق المحادثة</button>
+            </section>
           </div>}
         {actionMsg && (
           <div className="space-y-3">
