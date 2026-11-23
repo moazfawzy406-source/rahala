@@ -397,6 +397,7 @@ export function ChatView({
   const showChatMenu=(x:number,y:number)=>{setActionMsg(null);setMenuPoint({x,y});setChatMenuOpen(true);};
   useEffect(()=>{const close=(e:KeyboardEvent)=>{if(e.key==='Escape'){setActionMsg(null);setChatMenuOpen(false);}};window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close);},[]);
   const [actionMsg, setActionMsg] = useState<ChatMessage | null>(null);
+  useEffect(()=>{if(!chatMenuOpen)return;const timer=window.setTimeout(()=>document.querySelector<HTMLElement>('[role="menu"][aria-label="إجراءات المحادثة"] button')?.focus(),0);return()=>window.clearTimeout(timer);},[chatMenuOpen]);
   const [deleteAllTarget, setDeleteAllTarget] = useState<ChatMessage | null>(null);
   const [purgeTarget, setPurgeTarget] = useState<ChatMessage | null>(null);
   const [infoTarget, setInfoTarget] = useState<ChatMessage | null>(null);
@@ -1479,161 +1480,20 @@ export function ChatView({
       {/* Active Chat Column */}
       <div className="flex flex-col min-h-0 min-w-0">
       {/* Chat Header & Channel Tabs */}
-      <div onContextMenu={e=>{e.preventDefault();showChatMenu(e.clientX,e.clientY);}} onTouchStart={e=>{const t=e.touches[0];cancelLongPress();longPressTimerRef.current=window.setTimeout(()=>showChatMenu(t.clientX,t.clientY),550);}} onTouchEnd={cancelLongPress} onTouchMove={cancelLongPress} data-pinned="chat-header" className="shrink-0 relative z-10 border-b border-[var(--divider)] bg-[var(--bg-card)] px-3 sm:px-4 py-2.5 space-y-2.5">
-        <button onClick={()=>setPrivateChatsOpen(true)} className="min-h-[38px] px-3 rounded-xl border border-[var(--accent)]/40 text-[var(--accent)] text-xs font-bold">المحادثات الخاصة</button><button onClick={()=>setGroupsOpen(true)} className="min-h-[38px] px-3 rounded-xl border border-[var(--accent)]/40 text-[var(--accent)] text-xs font-bold">المجتمعات والجروبات</button>
-        {/* Mobile/Tablet Group Header Strip */}
-        <div className="flex lg:hidden items-center justify-between gap-2 pb-2 border-b border-[var(--divider)]">
-          <button
-            type="button"
-            onClick={() => {
-              setGroupNameDraft(groupSettings.groupName);
-              setGroupDescDraft(groupSettings.groupDescription);
-              setGroupRulesDraft(groupSettings.groupRules);
-              setGroupSettingsOpen(true);
-            }}
-            className="flex items-center gap-2.5 min-w-0 text-right group"
-          >
-            <div className="w-10 h-10 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 flex items-center justify-center shrink-0">
-              <Icons.Users className="w-5 h-5" />
-            </div>
+      <div data-pinned="chat-header" className="shrink-0 relative z-10 border-b border-[var(--divider)] bg-[var(--bg-card)]">
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-2">
+          <button type="button" onClick={()=>{setGroupNameDraft(groupSettings.groupName);setGroupDescDraft(groupSettings.groupDescription);setGroupRulesDraft(groupSettings.groupRules);setGroupSettingsOpen(true);}} aria-label="معلومات الجروب" className="flex items-center gap-2.5 min-w-0 flex-1 text-right rounded-xl min-h-[44px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+            <div className="w-10 h-10 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0"><Icons.Users className="w-5 h-5" /></div>
             <div className="min-w-0">
-              <div className="font-extrabold text-sm text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
-                {groupSettings.groupName}
-              </div>
-              <div className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1.5">
-                <span>اضغط لمعلومات وإعدادات الجروب</span>
-                {groupSettings.disappearingHours > 0 && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span className="text-[var(--accent)] font-semibold">
-                      اختفاء تلقائي ({DISAPPEARING_OPTIONS.find((d) => d.hours === groupSettings.disappearingHours)?.label})
-                    </span>
-                  </>
-                )}
-              </div>
+              <h2 className="font-extrabold text-sm text-[var(--text-primary)] truncate">{groupSettings.groupName}</h2>
+              <p className="text-[11px] text-[var(--text-secondary)] truncate mt-0.5">{chatLocked?'الإرسال متاح للمشرفين فقط':'مجتمع الدفعة'}{groupSettings.disappearingHours>0?' · رسائل مؤقتة':''}</p>
             </div>
           </button>
-
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setChatSettingsTab('prefs');
-                setChatSettingsOpen(true);
-              }}
-              aria-label="إعدادات المحادثة"
-              title="إعدادات المحادثة"
-              className="min-h-[40px] px-2.5 sm:px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] text-xs font-bold flex items-center gap-1.5 hover:border-[var(--accent)]"
-            >
-              <Icons.Sliders className="w-4 h-4 text-[var(--accent)]" />
-              <span className="hidden md:inline">إعدادات المحادثة</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setGroupNameDraft(groupSettings.groupName);
-                setGroupDescDraft(groupSettings.groupDescription);
-                setGroupRulesDraft(groupSettings.groupRules);
-                setGroupSettingsOpen(true);
-              }}
-              aria-label="إعدادات الجروب"
-              title="إعدادات الجروب"
-              className="min-h-[40px] px-2.5 sm:px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] text-xs font-bold flex items-center gap-1.5 hover:border-[var(--accent)]"
-            >
-              <Icons.Settings className="w-4 h-4 text-[var(--accent)]" />
-              <span className="hidden md:inline">إعدادات الجروب</span>
-            </button>
-          </div>
+          <button type="button" aria-label="المزيد من خيارات المحادثة" aria-haspopup="menu" aria-expanded={chatMenuOpen} onClick={e=>{const r=e.currentTarget.getBoundingClientRect();showChatMenu(Math.max(12,r.right-288),r.bottom+6);}} className="w-11 h-11 rounded-full shrink-0 flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--bg-surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><Icons.MoreVertical className="w-5 h-5" /></button>
         </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="hidden lg:flex items-center gap-2 min-w-0">
-            <h2 className="text-sm font-extrabold text-[var(--text-primary)] truncate">
-              {CHANNELS.find((c) => c.id === channel)?.label}
-            </h2>
-            <span className="text-xs text-[var(--text-secondary)] truncate">
-              · {CHANNELS.find((c) => c.id === channel)?.description}
-            </span>
-          </div>
-
-          <div className="flex lg:hidden items-center gap-1 p-1 rounded-xl bg-[var(--bg-surface)]">
-            {CHANNELS.map((ch) => {
-              const active = channel === ch.id;
-              const unread = unreadByChannel[ch.id] || 0;
-              return (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedIds([]);
-                    setChannel(ch.id);
-                    setSearchResults(null);
-                    setReplyTo(null);
-                    setEditingMsg(null);
-                  }}
-                  className={`min-h-[38px] px-3 sm:px-4 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
-                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  <span>{ch.label}</span>
-                  {unread > 0 && (
-                    <span
-                      className={`text-[11px] font-extrabold tabular-nums ${
-                        active ? 'text-[var(--accent-fg)]' : 'text-[var(--accent)]'
-                      }`}
-                    >
-                      ({unread})
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {isAdminOrOwner && (
-              <button
-                type="button"
-                onClick={handleToggleLock}
-                className={`min-h-[40px] px-3 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
-                  chatLocked
-                    ? 'bg-[var(--error-soft)] border-[var(--error)]/40 text-[var(--error)]'
-                    : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)]'
-                }`}
-              >
-                {chatLocked ? <Icons.Lock className="w-3.5 h-3.5" /> : <Icons.Unlock className="w-3.5 h-3.5" />}
-                <span className="hidden sm:inline">
-                  {chatLocked ? 'المحادثة مقفولة' : 'المحادثة مفتوحة'}
-                </span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setSearchOpen((v) => !v);
-                setSearchResults(null);
-              }}
-              aria-label="بحث في المحادثة"
-              className="min-h-[40px] min-w-[40px] rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] flex items-center justify-center hover:border-[var(--accent)]"
-            >
-              <Icons.Search className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenMembersAndMedia}
-              className="min-h-[40px] px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] text-xs font-bold flex items-center gap-1.5 hover:border-[var(--accent)] whitespace-nowrap"
-            >
-              <Icons.Users className="w-4 h-4 text-[var(--accent)]" />
-              <span className="hidden sm:inline">الأعضاء والوسائط</span>
-            </button>
-          </div>
+        <div role="tablist" aria-label="قنوات المحادثة" className="flex px-3 sm:px-4 gap-1 border-t border-[var(--divider)]/50">
+          {CHANNELS.map(ch=>{const active=channel===ch.id,unread=unreadByChannel[ch.id]||0;return <button key={ch.id} type="button" role="tab" aria-selected={active} onClick={()=>{setSelectedIds([]);setChannel(ch.id);setSearchResults(null);setReplyTo(null);setEditingMsg(null);}} className={`flex-1 min-w-0 min-h-[43px] flex items-center justify-center gap-1.5 border-b-[3px] text-xs font-bold transition-colors ${active?'border-[var(--accent)] text-[var(--accent)]':'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><span>{ch.label}</span>{unread>0&&<span className="min-w-4 h-4 px-1 rounded-full bg-[var(--accent)] text-[var(--accent-fg)] text-[10px] flex items-center justify-center">{unread}</span>}</button>;})}
         </div>
-
         {/* Pinned Message Banner (WhatsApp-style) */}
         {currentPinned && (
           <div className="px-3 py-2 rounded-xl bg-[var(--bg-surface)] border border-[var(--accent)]/35 flex items-center justify-between gap-2 text-xs">
@@ -2288,15 +2148,19 @@ export function ChatView({
       {/* Positioned context menus, shared by right click, long press and menu buttons. */}
       {(actionMsg || chatMenuOpen) && createPortal(
         <div className="fixed inset-0 z-[100]" onContextMenu={e=>e.preventDefault()} onClick={()=>{setActionMsg(null);setChatMenuOpen(false);}}>
-          <div role="menu" aria-label={actionMsg?'إجراءات الرسالة':'إجراءات المحادثة'} dir="rtl" onClick={e=>e.stopPropagation()} className="fixed w-[min(300px,calc(100vw-24px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--divider)] bg-[var(--bg-card)] p-2 shadow-2xl" style={{left:Math.max(12,Math.min(menuPoint.x,window.innerWidth-312)),top:Math.max(12,Math.min(menuPoint.y,window.innerHeight-Math.min(620,window.innerHeight-24)-12)),maxHeight:'min(620px,calc(100dvh - 24px))'}}>
+          <div role="menu" aria-label={actionMsg?'إجراءات الرسالة':'إجراءات المحادثة'} dir="rtl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{const buttons=Array.from(e.currentTarget.querySelectorAll('button'));const i=buttons.indexOf(document.activeElement as HTMLButtonElement);if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();buttons[(i+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}if(e.key==='Home'){e.preventDefault();buttons[0]?.focus();}if(e.key==='End'){e.preventDefault();buttons.at(-1)?.focus();}}} className="fixed w-[min(300px,calc(100vw-24px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--divider)] bg-[var(--bg-card)] p-2 shadow-2xl" style={{left:Math.max(12,Math.min(menuPoint.x,window.innerWidth-312)),top:chatMenuOpen?menuPoint.y:Math.max(12,Math.min(menuPoint.y,window.innerHeight-Math.min(620,window.innerHeight-24)-12)),maxHeight:chatMenuOpen?`calc(100dvh - ${menuPoint.y+12}px)`:'min(620px,calc(100dvh - 24px))'}}>
           {chatMenuOpen && <div className="grid gap-1 text-sm font-semibold [&>button]:min-h-[44px] [&>button]:text-right [&>button]:px-3 [&>button]:rounded-xl [&>button:hover]:bg-[var(--bg-surface)]">
             <div className="px-3 py-2 text-xs text-[var(--text-secondary)] border-b border-[var(--divider)]">{groupSettings.groupName}</div>
             <button onClick={()=>{setChatMenuOpen(false);setGroupNameDraft(groupSettings.groupName);setGroupDescDraft(groupSettings.groupDescription);setGroupRulesDraft(groupSettings.groupRules);setGroupSettingsOpen(true);}}>معلومات الجروب</button>
-            <button onClick={()=>{setChatMenuOpen(false);setSearchOpen(true);}}>بحث في المحادثة</button>
+            <button onClick={()=>{setChatMenuOpen(false);setPrivateChatsOpen(true);}}>المحادثات الخاصة</button>
+            <button onClick={()=>{setChatMenuOpen(false);setGroupsOpen(true);}}>المجتمعات والجروبات</button>
+            <button onClick={()=>{setChatMenuOpen(false);setSearchOpen(true);setSearchResults(null);}}>بحث في المحادثة</button>
+            <button onClick={()=>{setChatMenuOpen(false);onOpenMembersAndMedia();}}>الأعضاء والوسائط</button>
+            {isAdminOrOwner&&<button onClick={()=>{setChatMenuOpen(false);void handleToggleLock();}}>{chatLocked?'فتح المحادثة':'قفل المحادثة'}</button>}
             <button onClick={()=>{setChatMenuOpen(false);const first=messages.find(m=>m.deletedAt===null);if(first)setSelectedIds([first.id]);else onToast('لا توجد رسائل لتحديدها');}}>تحديد رسائل</button>
             <button onClick={()=>{setChatMenuOpen(false);void handleUpdateUserSettings({chatSoundsEnabled:!userSettings.chatSoundsEnabled});}}>{userSettings.chatSoundsEnabled?'كتم أصوات المحادثة':'تشغيل أصوات المحادثة'}</button>
             <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('prefs');setChatSettingsOpen(true);}}>خلفية وإعدادات المحادثة</button>
-            <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('starred');setChatSettingsOpen(true);}}>الرسائل المميزة بنجمة</button>
+            <button onClick={()=>{setChatMenuOpen(false);setChatSettingsTab('starred');void loadStarredMessages();setChatSettingsOpen(true);}}>الرسائل المميزة بنجمة</button>
             <button onClick={()=>{setChatMenuOpen(false);void handleExportChannelTxt();}}>تصدير المحادثة كنص</button>
             {isAdminOrOwner && <button className="text-[var(--error)]" onClick={()=>{setChatMenuOpen(false);setClearChannelConfirmOpen(true);}}>مسح المحادثة من شاشتي فقط</button>}
             <button onClick={()=>{setChatMenuOpen(false);onCloseChat();}}>إغلاق المحادثة</button>
