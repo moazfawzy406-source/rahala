@@ -1,0 +1,103 @@
+{
+  "subjects": [
+    {
+      "id": "demo_subject_1",
+      "name": "مادة تجريبية 1",
+      "color": "#E3B23C",
+      "ord": 1
+    },
+    {
+      "id": "demo_subject_2",
+      "name": "مادة تجريبية 2",
+      "color": "#E3B23C",
+      "ord": 2
+    },
+    {
+      "id": "demo_subject_3",
+      "name": "مادة تجريبية 3",
+      "color": "#E3B23C",
+      "ord": 3
+    },
+    {
+      "id": "demo_subject_4",
+      "name": "مادة تجريبية 4",
+      "color": "#E3B23C",
+      "ord": 4
+    }
+  ],
+  "sections": [
+    {
+      "id": "demo_subject_1_section_1",
+      "subject_id": "demo_subject_1",
+      "label": "محاضرات",
+      "ord": 1
+    },
+    {
+      "id": "demo_subject_1_section_2",
+      "subject_id": "demo_subject_1",
+      "label": "ملخصات",
+      "ord": 2
+    },
+    {
+      "id": "demo_subject_1_section_3",
+      "subject_id": "demo_subject_1",
+      "label": "مصادر",
+      "ord": 3
+    },
+    {
+      "id": "demo_subject_2_section_1",
+      "subject_id": "demo_subject_2",
+      "label": "محاضرات",
+      "ord": 1
+    },
+    {
+      "id": "demo_subject_2_section_2",
+      "subject_id": "demo_subject_2",
+      "label": "ملخصات",
+      "ord": 2
+    },
+    {
+      "id": "demo_subject_2_section_3",
+      "subject_id": "demo_subject_2",
+      "label": "مصادر",
+      "ord": 3
+    },
+    {
+      "id": "demo_subject_3_section_1",
+      "subject_id": "demo_subject_3",
+      "label": "محاضرات",
+      "ord": 1
+    },
+    {
+      "id": "demo_subject_3_section_2",
+      "subject_id": "demo_subject_3",
+      "label": "ملخصات",
+      "ord": 2
+    },
+    {
+      "id": "demo_subject_3_section_3",
+      "subject_id": "demo_subject_3",
+      "label": "مصادر",
+      "ord": 3
+    },
+    {
+      "id": "demo_subject_4_section_1",
+      "subject_id": "demo_subject_4",
+      "label": "محاضرات",
+      "ord": 1
+    },
+    {
+      "id": "demo_subject_4_section_2",
+      "subject_id": "demo_subject_4",
+      "label": "ملخصات",
+      "ord": 2
+    },
+    {
+      "id": "demo_subject_4_section_3",
+      "subject_id": "demo_subject_4",
+      "label": "مصادر",
+      "ord": 3
+    }
+  ],
+  "materials": []
+}

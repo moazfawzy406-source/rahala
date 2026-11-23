@@ -10,6 +10,7 @@ import {
   type SubjectAlertPreference,
   type SubjectRecord,
 } from '../../shared/types';
+import { useUpdateBlocker } from '../hooks/useSilentPWAUpdate';
 import { getToneLabel } from '../hooks/useSubjectPreferences';
 import { playAlertTone } from '../lib/alertAudio';
 import { ApiError, apiRequest, setStoredSessionToken, uploadAssetBinary } from '../lib/api';
@@ -52,6 +53,8 @@ export function AccountView({
   const [userBusy, setUserBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
 
+  const [recoveryPassword,setRecoveryPassword]=useState(''),[issuedRecovery,setIssuedRecovery]=useState<string|null>(null),[recoveryBusy,setRecoveryBusy]=useState(false);
+  useUpdateBlocker(Boolean(issuedRecovery));
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -288,7 +291,7 @@ export function AccountView({
   return (
     <div className="space-y-5 max-w-2xl mx-auto">
       {/* Identity Card */}
-      <section className="rahhala-card p-5 flex items-center justify-between gap-4">
+      <section data-pinned="account-header" className="rahhala-card rahhala-sticky-toolbar p-3 sm:p-5 flex items-center justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
           <Avatar name={user.displayName} assetId={user.avatarAssetId} size="lg" />
           <div className="min-w-0">
@@ -636,6 +639,8 @@ export function AccountView({
           </button>
         </form>
       </section>
+
+      {user.role==='member'&&<section className="rahhala-card p-5 space-y-3"><h2 className="font-extrabold">كود استرجاع الحساب</h2><p className="text-xs text-[var(--text-secondary)]">لو نسيت كلمة المرور، تقدر تستخدم الكود مع اسم المستخدم. إصدار كود جديد يُلغي القديم. الكود يظهر مرة واحدة ولا نحتفظ بنسخة قابلة للقراءة.</p><form className="space-y-3" onSubmit={async e=>{e.preventDefault();setRecoveryBusy(true);try{const r=await apiRequest<{recoveryCode:string}>('/api/auth/recovery-code',{method:'POST',body:{password:recoveryPassword}});setIssuedRecovery(r.recoveryCode);setRecoveryPassword('');}catch(e){onToast(e instanceof Error?e.message:'تعذر إصدار الكود',true);}finally{setRecoveryBusy(false);}}}><input type="password" autoComplete="current-password" aria-label="كلمة المرور لإصدار كود استرجاع" placeholder="كلمة المرور الحالية" className="rahhala-input w-full p-3" required value={recoveryPassword} onChange={e=>setRecoveryPassword(e.target.value)}/><button disabled={recoveryBusy} className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] font-bold">إصدار كود جديد</button></form>{issuedRecovery&&<div className="space-y-3"><code dir="ltr" className="block p-3 select-all break-all rounded-xl bg-[var(--bg-surface)]">{issuedRecovery}</code><button className="min-h-[44px] text-sm" onClick={()=>setIssuedRecovery(null)}>حفظت الكود، إخفاء</button></div>}</section>}
 
       {/* تغيير كلمة المرور */}
       <section className="rahhala-card p-5 space-y-3.5">

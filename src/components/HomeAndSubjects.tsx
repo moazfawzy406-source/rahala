@@ -314,7 +314,7 @@ export function HomeAndSubjects({
   if (selectedSubjectId) {
     return (
       <div className="space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div data-pinned="subject-header" className="rahhala-sticky-toolbar flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -777,17 +777,7 @@ export function HomeAndSubjects({
               كل ما تحتاجه لدراستك في مكان واحد
             </p>
           </div>
-          <div className="relative w-full sm:w-80">
-            <Icons.Search className="w-4 h-4 text-[var(--text-secondary)] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="ابحث في المواد والملخصات…"
-              aria-label="ابحث في المواد والمحتوى الدراسي"
-              className="rahhala-input w-full pr-10 pl-3.5 py-2"
-            />
-          </div>
+
         </div>
 
         {/* Four Quick Actions */}
@@ -932,6 +922,20 @@ export function HomeAndSubjects({
         )}
       </motion.section>
 
+      <div data-pinned="subjects-search" className="rahhala-sticky-toolbar flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-extrabold">المواد الدراسية</h2>
+          <div className="relative w-full sm:w-72">
+            <Icons.Search className="w-4 h-4 text-[var(--text-secondary)] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ابحث في المواد والملخصات…"
+              aria-label="ابحث في المواد والمحتوى الدراسي"
+              className="rahhala-input w-full pr-10 pl-3.5 py-2"
+            />
+          </div>
+      </div>
       {/* Cross-Subject Material Search Results when searching */}
       {search.trim().length > 0 && (
         <section aria-labelledby="material-search-heading" className="rahhala-card p-4 sm:p-5 space-y-3">
@@ -1017,13 +1021,13 @@ export function HomeAndSubjects({
               <motion.button
                 key={s.id}
                 type="button"
-                initial={{ opacity: 0, y: 10 }}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
                 whileHover={{ y: -3 }}
                 whileTap={{ scale: 0.985 }}
                 transition={{
                   duration: 0.2,
-                  delay: Math.min(idx * 0.035, 0.21),
+                  delay: 0,
                   ease: [0.16, 1, 0.3, 1],
                 }}
                 onClick={() => onSelectSubject(s.id)}

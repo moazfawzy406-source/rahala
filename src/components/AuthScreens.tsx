@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import type { AppPublicConfig, AuthUser } from '../../shared/types';
 import { ApiError, apiRequest, setStoredSessionToken } from '../lib/api';
+import { useUpdateBlocker } from '../hooks/useSilentPWAUpdate';
 import { Icons, RahhalaBookMark } from './Icons';
 
 export function AuthScreens({
@@ -15,6 +16,10 @@ export function AuthScreens({
   onAuthenticated: (user: AuthUser) => void;
   onOpenThemeModal: () => void;
 }) {
+  const challenge=useRef<HTMLDivElement>(null);
+  const [turnstileToken,setTurnstileToken]=useState(''),[recoveryCode,setRecoveryCode]=useState<string|null>(null),[recovering,setRecovering]=useState(false),[recoverUsername,setRecoverUsername]=useState(''),[recoverCode,setRecoverCode]=useState(''),[recoverPassword,setRecoverPassword]=useState(''),[recoverConfirm,setRecoverConfirm]=useState('');
+  useUpdateBlocker(Boolean(recoveryCode));
+  const [codeSaved,setCodeSaved]=useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [notice, setNotice] = useState<string | null>(initialNotice);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +39,8 @@ export function AuthScreens({
   const [showRegPass, setShowRegPass] = useState(false);
   const [pendingCreated, setPendingCreated] = useState(false);
 
+  useEffect(()=>{if(mode!=='register'||!config.turnstileSiteKey||pendingCreated||recovering)return;let id:string|undefined,cancel=false;const render=()=>{const t=(window as any).turnstile;if(t&&challenge.current&&!cancel)id=t.render(challenge.current,{sitekey:config.turnstileSiteKey,action:'register',callback:(token:string)=>setTurnstileToken(token),'expired-callback':()=>setTurnstileToken(''),'error-callback':()=>setTurnstileToken('')});};let script=document.querySelector<HTMLScriptElement>('script[data-rahala-turnstile]');if((window as any).turnstile)render();else{if(!script){script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';script.dataset.rahalaTurnstile='1';script.async=true;document.head.appendChild(script);}script.addEventListener('load',render);}return()=>{cancel=true;script?.removeEventListener('load',render);if(id)(window as any).turnstile?.remove(id);setTurnstileToken('');};},[mode,config.turnstileSiteKey,pendingCreated,recovering]);
+  useEffect(()=>{if(!recoveryCode)return;const protect=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',protect);return()=>window.removeEventListener('beforeunload',protect);},[recoveryCode]);
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -64,23 +71,23 @@ export function AuthScreens({
     }
     setBusy(true);
     try {
-      const res = await apiRequest<{ message: string }>('/api/auth/register', {
+      const res = await apiRequest<{ message: string;recoveryCode?:string;approvalStatus:string }>('/api/auth/register', {
         method: 'POST',
         body: {
           displayName: regName,
           username: regUsername,
-          email: regEmail,
+          // Email backend retained; hidden from the current no-email signup.
           password: regPassword,
-          confirmPassword: regConfirm,
+          confirmPassword: regConfirm,turnstileToken,
         },
         skipUnauthorizedHandler: true,
       });
-      setPendingCreated(true);
+      setCodeSaved(false);setRecoveryCode(res.recoveryCode??null);setPendingCreated(true);
       setNotice(res.message);
       setRegPassword('');
       setRegConfirm('');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'تعذر إنشاء الحساب');
+      setError(err instanceof ApiError ? err.message : 'تعذر إنشاء الحساب');setTurnstileToken('');(window as any).turnstile?.reset();
     } finally {
       setBusy(false);
     }
@@ -143,7 +150,7 @@ export function AuthScreens({
         <div className="rahhala-card p-6">
           <div className="mb-5">
             <h2 className="text-lg font-bold text-[var(--text-primary)]">
-              {mode === 'login' ? 'تسجيل الدخول' : 'إنشاء حساب طالب'}
+              {recovering?'استرجاع الحساب':pendingCreated&&recoveryCode?'احفظ كود الاسترجاع':mode === 'login' ? 'تسجيل الدخول' : 'إنشاء حساب طالب'}
             </h2>
             <p className="text-xs text-[var(--text-secondary)] mt-1">{config.tagline}</p>
           </div>
@@ -168,7 +175,7 @@ export function AuthScreens({
             </div>
           )}
 
-          {mode === 'login' ? (
+          {recovering?<form className="space-y-3" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(null);try{const r=await apiRequest<{recoveryCode:string}>('/api/auth/recover',{method:'POST',body:{username:recoverUsername,recoveryCode:recoverCode,password:recoverPassword,confirmPassword:recoverConfirm},skipUnauthorizedHandler:true});setCodeSaved(false);setRecoveryCode(r.recoveryCode);setRecoverCode('');setRecoverPassword('');setRecoverConfirm('');setRecovering(false);setPendingCreated(true);setMode('register');setNotice('تم تغيير كلمة المرور. احفظ الكود البديل ثم سجّل الدخول.');}catch(e){setError(e instanceof Error?e.message:'تعذر الاسترجاع');}finally{setBusy(false);}}}><p className="text-xs text-[var(--text-secondary)]">اكتب اسم المستخدم والكود اللي حفظته عند إنشاء الحساب.</p><input aria-label="اسم مستخدم الاسترجاع" className="rahhala-input w-full p-3" value={recoverUsername} onChange={e=>setRecoverUsername(e.target.value)} placeholder="اسم المستخدم"/><input aria-label="كود الاسترجاع" className="rahhala-input w-full p-3" value={recoverCode} onChange={e=>setRecoverCode(e.target.value)} placeholder="كود الاسترجاع" autoComplete="off"/><input aria-label="كلمة المرور الجديدة" type="password" className="rahhala-input w-full p-3" value={recoverPassword} onChange={e=>setRecoverPassword(e.target.value)} placeholder="كلمة المرور الجديدة"/><input aria-label="تأكيد كلمة المرور الجديدة" type="password" className="rahhala-input w-full p-3" value={recoverConfirm} onChange={e=>setRecoverConfirm(e.target.value)} placeholder="تأكيد كلمة المرور"/><button disabled={busy} className="w-full p-3 rounded-xl bg-[var(--accent)] text-[var(--accent-fg)]">استرجاع الحساب</button><button type="button" onClick={()=>setRecovering(false)}>العودة للدخول</button></form>:mode === 'login' ? (
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label
@@ -231,9 +238,10 @@ export function AuthScreens({
               </button>
 
               <p className="text-xs text-[var(--text-secondary)] text-center leading-relaxed pt-1">
-                لو نسيت كلمة المرور، كلم المشرف لاستعادة الدخول.
+                لو مش معاك كود الاسترجاع، كلم مالك المنصة لمساعدتك.
               </p>
 
+              <button type="button" onClick={()=>{setRecovering(true);setError(null);setNotice(null);}} className="w-full min-h-[40px] text-xs text-[var(--accent)]">نسيت كلمة المرور؟ استخدم كود الاسترجاع</button>
               <div className="pt-3 border-t border-[var(--divider)] text-center">
                 <button
                   type="button"
@@ -252,24 +260,26 @@ export function AuthScreens({
           ) : pendingCreated ? (
             <div className="space-y-4 text-center py-2">
               <p className="text-sm text-[var(--text-primary)] font-semibold">
-                حسابك بانتظار موافقة المشرف.
+                {recoveryCode?'حسابك جاهز للدخول. احفظ كود الاسترجاع الآن.':'حسابك بانتظار موافقة المشرف.'}
               </p>
               <p className="text-xs text-[var(--text-secondary)]">
-                أول ما المشرف يوافق على طلب انضمامك هتقدر تدخل باستخدام اسم المستخدم وكلمة المرور.
+                {recoveryCode?'الكود يظهر مرة واحدة فقط. احتفظ به في مكان آمن، لا ترسله لأي شخص.':'أول ما المشرف يوافق على طلب انضمامك هتقدر تدخل باستخدام اسم المستخدم وكلمة المرور.'}
               </p>
+              {recoveryCode&&<div className="space-y-2"><code dir="ltr" className="block break-all select-all p-4 rounded-xl bg-[var(--bg-surface)]">{recoveryCode}</code><button type="button" className="min-h-[40px] text-xs" onClick={async()=>{try{await navigator.clipboard.writeText(recoveryCode);setNotice('تم نسخ الكود، احفظه في مكان آمن');}catch{setError('حدد الكود وانسخه يدويًا');}}}>نسخ كود الاسترجاع</button></div>}
+              {recoveryCode&&<label className="flex items-center gap-2 text-xs text-start"><input type="checkbox" checked={codeSaved} onChange={e=>setCodeSaved(e.target.checked)}/>حفظت كود الاسترجاع في مكان آمن</label>}
               <button
-                type="button"
+                type="button" disabled={Boolean(recoveryCode)&&!codeSaved}
                 onClick={() => {
-                  setPendingCreated(false);
+                  setPendingCreated(false);setRecoveryCode(null);setRecovering(false);
                   setMode('login');
                 }}
-                className="w-full min-h-[44px] rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] font-bold text-sm"
+                className="w-full min-h-[44px] disabled:opacity-50 rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] font-bold text-sm"
               >
                 العودة لتسجيل الدخول
               </button>
             </div>
           ) : (
-            <form onSubmit={handleRegister} className="space-y-3.5">
+            <form onSubmit={handleRegister} className="space-y-3.5"><div ref={challenge}/>
               <div>
                 <label
                   htmlFor="reg-name"
@@ -317,7 +327,7 @@ export function AuthScreens({
                 </p>
               </div>
 
-              <div>
+              <div hidden>
                 <label
                   htmlFor="reg-email"
                   className="block text-sm font-semibold text-[var(--text-primary)] mb-1"
@@ -329,7 +339,6 @@ export function AuthScreens({
                   type="email"
                   dir="ltr"
                   autoComplete="email"
-                  required
                   maxLength={120}
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { MajalisChatMessageRecord, MajalisRoomSettings } from '../../shared/types.ts';
 import type { RahhalaConfig } from '../config.ts';
-import { getSetting, type RahhalaDb } from '../db.ts';
+import { getSetting, type RahhalaDb } from '../db-core.ts';
 import { type AuthenticatedRequest, createAuthMiddleware } from '../middleware/auth.ts';
 import type { RealtimeHub } from '../ws.ts';
 

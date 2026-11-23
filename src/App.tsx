@@ -1,3 +1,4 @@
+import {useSilentPWAUpdate,useUpdateBlocker} from './hooks/useSilentPWAUpdate';
 import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
@@ -36,6 +37,7 @@ import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useStudyReminders } from './hooks/useStudyReminders';
 import { useSubjectPreferences } from './hooks/useSubjectPreferences';
 import { useTheme } from './hooks/useTheme';
+import { useWebSocket } from './hooks/useWebSocket';
 import { ApiError, apiRequest, setStoredSessionToken, setUnauthorizedHandler } from './lib/api';
 
 type NavTab = 'subjects' | 'dashboard' | 'majalis' | 'chat' | 'admin' | 'account';
@@ -57,6 +59,7 @@ const DEFAULT_CONFIG: AppPublicConfig = {
 };
 
 export default function App() {
+  useSilentPWAUpdate();
   const { theme, setTheme } = useTheme();
   const isOnline = useOnlineStatus();
 
@@ -207,14 +210,17 @@ export default function App() {
     if (!user) return;
     void refreshUnread();
     void refreshAdminBadge();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void refreshUnread();
-        void refreshAdminBadge();
-      }
-    }, 30_000);
-    return () => window.clearInterval(id);
+    const refresh = () => { if(document.visibilityState === 'visible') { void refreshUnread(); void refreshAdminBadge(); } };
+    document.addEventListener('visibilitychange',refresh);
+    return () => document.removeEventListener('visibilitychange',refresh);
   }, [user, refreshUnread, refreshAdminBadge]);
+
+  useWebSocket(Boolean(user), useCallback((event) => {
+    if(event.type === 'session:revoked') { forceLogoutWithMessage('انتهت الجلسة، سجل دخول من جديد'); return; }
+    if(event.type === 'user:updated') void refreshCurrentUser();
+    if(event.type === 'message:created' || event.type === 'chat:channel_wiped') void refreshUnread();
+    if(event.type === 'admin:requests_updated') void refreshAdminBadge();
+  }, [forceLogoutWithMessage,refreshCurrentUser,refreshUnread,refreshAdminBadge]));
 
   const majalisController = useMajalisController(config, user, activeTab === 'majalis', showToast);
   const subjectPreferences = useSubjectPreferences(user, showToast);
@@ -284,6 +290,7 @@ export default function App() {
       setMajalisTheaterMode(false);
     }
   }, [majalisController.joined, activeTab]);
+  useUpdateBlocker(majalisController.joined);
 
   // Global keyboard shortcuts: Ctrl/Cmd+K for Command Palette, ? for Shortcuts Modal
   useEffect(() => {
@@ -407,7 +414,7 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="min-h-dvh flex flex-col text-[var(--text-primary)]">
+      <div className="h-dvh overflow-hidden flex flex-col text-[var(--text-primary)]">
         <PWAStatusBanners isOnline={isOnline} />
 
         {/* In-App Study Alarm Banner */}
@@ -425,7 +432,7 @@ export default function App() {
 
         {/* Top Header */}
         {!isTheaterActive && (
-        <header className="sticky top-0 z-30 shrink-0 h-14 border-b border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2">
+        <header className="shrink-0 relative z-30 h-14 border-b border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             {activeTab === 'subjects' && selectedSubjectId && (
               <button
@@ -521,7 +528,7 @@ export default function App() {
           {!isTheaterActive && (
           <aside
             aria-label="التنقل الرئيسي"
-            className="hidden md:flex flex-col w-60 shrink-0 self-start sticky top-14 h-[calc(100dvh-3.5rem)] overflow-y-auto border-l border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl p-3 gap-1.5"
+            className="hidden md:flex flex-col w-60 shrink-0 overflow-y-auto overscroll-contain border-l border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl p-3 gap-1.5"
           >
             {navItems.map((item) => {
               const active = activeTab === item.id;
@@ -560,7 +567,7 @@ export default function App() {
           )}
 
           <main
-            className={`flex-1 min-w-0 px-2.5 sm:px-5 mx-auto w-full ${
+            className={`flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-contain px-3 sm:px-6 mx-auto w-full ${
               isTheaterActive
                 ? 'max-w-[1520px] py-3 sm:py-4'
                 : activeTab === 'chat'
@@ -568,12 +575,13 @@ export default function App() {
                 : 'max-w-6xl py-4 sm:py-6 pb-24 md:pb-6'
             }`}
           >
-            <AnimatePresence mode="wait">
+            <AnimatePresence initial={false}>
               <motion.div
                 key={activeTab === 'subjects' ? `subjects-${selectedSubjectId ?? 'home'}` : activeTab}
-                initial={{ opacity: 0, y: 6 }}
+                className={activeTab === 'chat' ? 'h-full min-h-0' : undefined}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
+                exit={undefined}
                 transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
               >
                 {activeTab === 'subjects' && (
@@ -628,6 +636,7 @@ export default function App() {
 
                 {activeTab === 'chat' && (
                   <ChatView
+                    onCloseChat={()=>setActiveTab('subjects')}
                     user={user}
                     unreadByChannel={unreadCounts}
                     onUnreadRefresh={refreshUnread}

@@ -1374,6 +1374,16 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
     expect(sendDm.data.message.encrypted).toBe(true);
     const dmMsgId = sendDm.data.message.id;
 
+    // Group-bound uploads may still look pending in legacy assets, but cannot be rebound to a DM.
+    const groupUpload=await alice.json('/api/assets/upload',{method:'POST',headers:{'X-Rahhala-Purpose':'chat_file','X-Rahhala-Filename':'isolated.pdf','Content-Type':'application/octet-stream'},body:new Uint8Array(makeMinimalPdf())});
+    const ca=groupUpload.data.asset.assetId;
+    const isolationCommunity=await owner.json('/api/communities',{method:'POST',body:JSON.stringify({name:'Isolation'})});
+    const isolationGroup=await owner.json('/api/groups',{method:'POST',body:JSON.stringify({communityId:isolationCommunity.data.id,name:'Isolation'})});
+    // Bind through the mapping table using a valid group message owned by its creator.
+    const gm=await owner.json(`/api/groups/${isolationGroup.data.id}/messages`,{method:'POST',body:JSON.stringify({body:'Isolation',requestKey:'isolation-bind'})});
+    ctx.db.prepare('INSERT INTO group_message_assets(asset_id,message_id) VALUES(?,?)').run(ca,gm.data.id);
+    expect((await alice.json(`/api/chat/conversations/${dmId}/messages`,{method:'POST',body:JSON.stringify({body:'must not move group asset',fileAssetId:ca,idempotencyKey:'isolation-rebind'})})).status).toBe(403);
+
     // Verify ciphertext in SQLite is encrypted with AES-256-GCM ('enc:v1:...') and has NO plaintext
     const rawRow = ctx.db
       .prepare('SELECT cipher_body FROM conversation_messages WHERE id = ?')
@@ -1468,7 +1478,3 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
     expect((await bob.json(`/api/chat/conversations/${grpId}/messages`)).status).toBe(403);
   });
 });
-
-
-
-

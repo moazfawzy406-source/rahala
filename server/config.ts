@@ -1,6 +1,11 @@
 import path from 'node:path';
 
 export interface RahhalaConfig {
+  openRegistration?: boolean;
+  turnstileSiteKey?: string;
+  turnstileSecret?: string;
+  signupWebhookUrl?: string;
+  signupWebhookSecret?: string;
   port: number;
   dbPath: string;
   institutionSubtitle: string;
@@ -11,6 +16,8 @@ export interface RahhalaConfig {
   maxUploadBytes: number;
   maxVoiceBytes: number;
   maxAvatarBytes: number;
+  maxStoredAssetBytes?: number;
+  maxUserStoredAssetBytes?: number;
 }
 
 export function loadConfig(overrides?: Partial<RahhalaConfig>): RahhalaConfig {
@@ -28,9 +35,14 @@ export function loadConfig(overrides?: Partial<RahhalaConfig>): RahhalaConfig {
 
   const previewDemoEnabled =
     overrides?.previewDemoEnabled ??
-    (!isProduction && process.env.RAHHALA_PREVIEW_DEMO !== 'false');
+    (!isProduction && String(process.env.RAHHALA_PREVIEW_DEMO) === 'true');
 
   return {
+    openRegistration:overrides?.openRegistration??false,
+    turnstileSiteKey:overrides?.turnstileSiteKey,
+    turnstileSecret:overrides?.turnstileSecret,
+    signupWebhookUrl:overrides?.signupWebhookUrl,
+    signupWebhookSecret:overrides?.signupWebhookSecret,
     port: overrides?.port ?? Number(process.env.PORT || 3000),
     dbPath,
     institutionSubtitle:
@@ -39,9 +51,11 @@ export function loadConfig(overrides?: Partial<RahhalaConfig>): RahhalaConfig {
     meetingProviderUrl,
     isProduction,
     previewDemoEnabled,
-    sessionIdleMs: overrides?.sessionIdleMs ?? 2 * 60 * 60 * 1000, // 2 hours
+    sessionIdleMs: overrides?.sessionIdleMs ?? 90 * 24 * 60 * 60 * 1000, // 90 days, sliding on active use
     maxUploadBytes: overrides?.maxUploadBytes ?? 25_000_000,
     maxVoiceBytes: overrides?.maxVoiceBytes ?? 12_000_000,
     maxAvatarBytes: overrides?.maxAvatarBytes ?? 4_000_000,
+    maxStoredAssetBytes: overrides?.maxStoredAssetBytes,
+    maxUserStoredAssetBytes: overrides?.maxUserStoredAssetBytes,
   };
 }

@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.halqadawa.rahala",
+      "sha256_cert_fingerprints": [
+        "51:43:D3:DE:45:B4:6E:FC:33:EC:D5:A7:5D:69:E5:DF:FE:58:1F:01:3A:15:20:60:D7:3D:5E:D4:69:6C:69:EB"
+      ]
+    }
+  }
+]

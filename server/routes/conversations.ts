@@ -1231,7 +1231,7 @@ export function createConversationsRouter(
     if (audioAssetId) {
       const a = db
         .prepare(
-          "SELECT id, kind, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ?"
+          "SELECT id, kind, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ? AND NOT EXISTS (SELECT 1 FROM group_message_assets ga WHERE ga.asset_id=assets.id)"
         )
         .get(audioAssetId, viewer.id) as
         | { id: string; kind: string; original_safe_name: string }
@@ -1246,7 +1246,7 @@ export function createConversationsRouter(
     if (fileAssetId) {
       const f = db
         .prepare(
-          "SELECT id, kind, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ?"
+          "SELECT id, kind, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ? AND NOT EXISTS (SELECT 1 FROM group_message_assets ga WHERE ga.asset_id=assets.id)"
         )
         .get(fileAssetId, viewer.id) as
         | { id: string; kind: string; original_safe_name: string }
@@ -1594,13 +1594,15 @@ export function createConversationsRouter(
     }
 
     const cutoff = getEffectiveConvCutoff(conv, mem.cleared_before_at);
-    const readable = db
+    const requested=z.array(z.number().int().positive()).min(1).max(60).safeParse(req.body?.messageIds);
+    const candidates = db
       .prepare(
         `SELECT id, sender_id FROM conversation_messages
          WHERE conversation_id = ? AND id <= ? AND created_at >= ? AND deleted_at IS NULL
          ORDER BY id DESC LIMIT 60`
       )
       .all(convId, highestMessageId, cutoff) as Array<{ id: number; sender_id: string | null }>;
+    const readable=requested.success?candidates.filter(m=>requested.data.includes(m.id)):candidates;
 
     const maxId = readable.length > 0 ? readable[0].id : 0;
     const now = Date.now();

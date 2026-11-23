@@ -2,7 +2,7 @@ import type { Server as HttpServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { RahhalaConfig } from './config.ts';
 import type { RahhalaDb } from './db.ts';
-import { getOrCreateSigningSecret } from './db.ts';
+import { getOrCreateSigningSecret } from './db-core.ts';
 import { verifyShortToken } from './lib/crypto.ts';
 import { canViewerAccessMessage } from './lib/historyAccess.ts';
 import {
@@ -63,6 +63,13 @@ interface RoomSettingsRow {
 }
 
 export interface RealtimeHub {
+  notifyGroupUpdated: (groupId:string) => void;
+  notifyGroupMembership: (userId:string) => void;
+  broadcastAdminRequestsUpdated?: () => void;
+  exportState?: () => any;
+  importState?: (s: any) => void;
+  restoreClient?: (ws: any, meta: any) => void;
+  clientsState?: () => Array<{ws: any;meta: any}>;
   broadcastMessageCreated: (messageId: number, channel: ChannelId) => void;
   broadcastMessageUpdated: (messageId: number, channel: ChannelId) => void;
   broadcastMessageRemoved: (messageId: number, channel: ChannelId) => void;
@@ -1200,6 +1207,22 @@ export function setupWebSocketHub(
   }
 
   return {
+    notifyGroupUpdated(groupId) {for(const c of clients){if(getViewerForClient(c.userId)?.approvalStatus==='approved'&&db.prepare("SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=? AND status='approved'").get(groupId,c.userId))sendToClient(c,{type:'group:updated',groupId});}},
+    notifyGroupMembership(userId) {for(const c of clients){if(c.userId===userId)sendToClient(c,{type:'group:membership'});}},
+    broadcastAdminRequestsUpdated() { for(const c of clients) { const v=getViewerForClient(c.userId); if(v && (v.role==='admin'||v.role==='owner')) sendToClient(c,{type:'admin:requests_updated'}); } },
+    exportState() {
+      return { timers: [...roomTimers], knocks: [...roomKnocks].map(([k,v])=>[k,[...v]]), admitted: [...roomAdmittedUsers].map(([k,v])=>[k,[...v]]), spotlights: [...roomSpotlights] };
+    },
+    importState(s: any) {
+      for (const [k,v] of s?.timers ?? []) roomTimers.set(k,v);
+      for (const [k,v] of s?.knocks ?? []) roomKnocks.set(k,new Map(v));
+      for (const [k,v] of s?.admitted ?? []) roomAdmittedUsers.set(k,new Set(v));
+      for (const [k,v] of s?.spotlights ?? []) roomSpotlights.set(k,v);
+    },
+    restoreClient(ws: any, meta: any) {
+      const restored = { ...meta, ws }; clients.add(restored); wss.emit('connection',ws,null,restored);
+    },
+    clientsState() { return [...clients].map(({ ws, ...meta })=>({ ws, meta })); },
     broadcastMessageCreated(messageId, channel) {
       const msgRow = db
         .prepare('SELECT id, created_at, deleted_at FROM messages WHERE id = ?')

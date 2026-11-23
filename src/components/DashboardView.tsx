@@ -560,7 +560,7 @@ export function DashboardView({
   return (
     <div className="space-y-6">
       {/* Header Row + Weekly / Monthly Segmented Toggle */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div data-pinned="dashboard-header" className="rahhala-sticky-toolbar flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--text-primary)] leading-tight">
             لوحة إنجاز المذاكرة

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { THEMES, type ThemeId } from '../../shared/types';
-import { fetchAssetAccessUrl } from '../lib/api';
+import { loadProtectedImage, peekProtectedImage } from '../lib/protectedImage';
 import { getInitials } from '../lib/formatters';
 import { downloadProtectedAsset } from '../lib/reliableDownload';
 import { Icons } from './Icons';
@@ -182,13 +182,14 @@ export function ProtectedImage({
   className?: string;
   onClick?: () => void;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(() => peekProtectedImage(assetId));
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
     setFailed(false);
-    fetchAssetAccessUrl(assetId)
+    setSrc(peekProtectedImage(assetId));
+    loadProtectedImage(assetId)
       .then((url) => {
         if (active) setSrc(url);
       })
@@ -226,12 +227,8 @@ export function ProtectedImage({
       alt={alt}
       referrerPolicy="no-referrer"
       onClick={onClick}
-      onError={() => {
-        // Refresh token once on expiry
-        fetchAssetAccessUrl(assetId)
-          .then((fresh) => setSrc(fresh))
-          .catch(() => setFailed(true));
-      }}
+      onError={() => setFailed(true)}
+      decoding="async"
       className={className}
     />
   );

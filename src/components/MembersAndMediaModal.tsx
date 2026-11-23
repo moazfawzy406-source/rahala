@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useUpdateBlocker } from '../hooks/useSilentPWAUpdate';
 import {
   ROLE_LABELS,
   type AuthUser,
@@ -43,6 +44,8 @@ export function MembersAndMediaModal({
 
   const [selectedMember, setSelectedMember] = useState<PublicMember | null>(null);
   const [adminEmailEdit, setAdminEmailEdit] = useState('');
+  const [issuedRecovery,setIssuedRecovery]=useState<string|null>(null);
+  useUpdateBlocker(Boolean(issuedRecovery));
   const [adminTempPass, setAdminTempPass] = useState('');
   const [mutedIds, setMutedIds] = useState<Set<string>>(new Set());
   const [actionBusy, setActionBusy] = useState(false);
@@ -129,6 +132,7 @@ export function MembersAndMediaModal({
     return false;
   };
 
+  useEffect(()=>setIssuedRecovery(null),[selectedMember?.id]);
   const canManageRecovery = (target: PublicMember) => canRemoveTarget(target);
 
   const handleToggleMuteChat = async (target: PublicMember) => {
@@ -471,7 +475,7 @@ export function MembersAndMediaModal({
 
                 {canManageRecovery(selectedMember) && (
                   <>
-                    <form onSubmit={handleSaveTargetEmail} className="space-y-2">
+                    <form hidden onSubmit={handleSaveTargetEmail} className="space-y-2">
                       <label className="block text-xs font-semibold text-[var(--text-secondary)]">
                         البريد الإلكتروني السري (للإدارة فقط)
                       </label>
@@ -494,6 +498,7 @@ export function MembersAndMediaModal({
                       </div>
                     </form>
 
+                    {currentUser.role==='owner'&&selectedMember.role==='member'&&<div className="space-y-2 border border-[var(--divider)] rounded-xl p-3"><button type="button" disabled={actionBusy} className="min-h-[44px] text-sm font-bold text-[var(--accent)]" onClick={async()=>{if(!window.confirm('إصدار كود جديد يُلغي الكود السابق ويسجل خروج العضو من كل الأجهزة. متابعة؟'))return;setActionBusy(true);try{const r=await apiRequest<{recoveryCode:string}>(`/api/admin/members/${encodeURIComponent(selectedMember.id)}/recovery-code`,{method:'POST',body:{}});setIssuedRecovery(r.recoveryCode);}catch(e){onToast(e instanceof Error?e.message:'تعذر إصدار الكود',true);}finally{setActionBusy(false);}}}>إصدار كود استرجاع جديد</button>{issuedRecovery&&<><p className="text-xs text-[var(--text-secondary)]">يظهر مرة واحدة. سلّمه للعضو بشكل خاص.</p><code dir="ltr" className="block select-all break-all text-sm">{issuedRecovery}</code></>}</div>}
                     <div className="space-y-2">
                       <label className="block text-xs font-semibold text-[var(--text-secondary)]">
                         تعيين كلمة مرور مؤقتة (يُلغي جميع جلسات العضو فورًا)

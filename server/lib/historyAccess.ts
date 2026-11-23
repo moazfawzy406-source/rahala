@@ -1,3 +1,4 @@
+import { groupMessageVisible } from './groupAccess.ts';
 import type { RahhalaDb } from '../db.ts';
 import type { UserRole } from '../../shared/types.ts';
 
@@ -51,6 +52,9 @@ export function canViewerAccessAsset(
   }
 ): boolean {
   if (viewer.approvalStatus !== 'approved') return false;
+
+  const grouped=db.prepare('SELECT message_id FROM group_message_assets WHERE asset_id=?').get(assetRow.id) as {message_id:number}|undefined;
+  if(grouped)return Boolean(groupMessageVisible(db,grouped.message_id,viewer.id));
 
   if (assetRow.binding_type === 'avatar') {
     return true;

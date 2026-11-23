@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { RahhalaConfig } from '../config.ts';
-import { getSetting, setSetting, type RahhalaDb } from '../db.ts';
+import { getSetting, setSetting, type RahhalaDb } from '../db-core.ts';
 import { canViewerAccessMessage, getHistoryCutoff } from '../lib/historyAccess.ts';
 import { type AuthenticatedRequest, createAuthMiddleware } from '../middleware/auth.ts';
 import type { RealtimeHub } from '../ws.ts';
@@ -712,7 +712,7 @@ export function createChatRouter(
     if (audioAssetId) {
       const a = db
         .prepare(
-          "SELECT id, uploader_id, kind, binding_type, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ?"
+          "SELECT id, uploader_id, kind, binding_type, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ? AND NOT EXISTS(SELECT 1 FROM group_message_assets WHERE asset_id=assets.id)"
         )
         .get(audioAssetId, viewer.id) as
         | { id: string; kind: string; original_safe_name: string }
@@ -727,7 +727,7 @@ export function createChatRouter(
     if (fileAssetId) {
       const f = db
         .prepare(
-          "SELECT id, uploader_id, kind, binding_type, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ?"
+          "SELECT id, uploader_id, kind, binding_type, original_safe_name FROM assets WHERE id = ? AND binding_type = 'pending' AND uploader_id = ? AND NOT EXISTS(SELECT 1 FROM group_message_assets WHERE asset_id=assets.id)"
         )
         .get(fileAssetId, viewer.id) as
         | { id: string; kind: string; original_safe_name: string }
@@ -806,6 +806,64 @@ export function createChatRouter(
 
     hub.broadcastMessageCreated(newMsgId, channel);
     res.status(201).json({ message: hydrateMessages([inserted], viewer)[0] });
+  });
+
+  router.post('/chat/selection', requireAuth, (req: AuthenticatedRequest, res) => {
+    const parsed=z.object({messageIds:z.array(z.number().int().positive()).min(1).max(20),action:z.enum(['hide','delete','star'])}).safeParse(req.body);
+    if(!parsed.success){res.status(400).json({error:'تحديد غير صالح'});return;}
+    const viewer=req.authUser!,now=Date.now(),cutoff=getEffectiveCutoff(db,viewer);
+    const rows=[...new Set(parsed.data.messageIds)].map(id=>db.prepare('SELECT * FROM messages WHERE id=?').get(id) as any);
+    if(rows.some(m=>!m||m.created_at<cutoff||!canViewerAccessMessage(db,viewer,m))){res.status(403).json({error:'إحدى الرسائل غير متاحة'});return;}
+    if(parsed.data.action==='delete'&&rows.some(m=>viewer.role!=='owner'&&(m.sender_id===viewer.id?now-m.created_at>=DELETE_FOR_ALL_LIMIT_MS:viewer.role!=='admin'))){res.status(403).json({error:'لا تملك صلاحية حذف كل الرسائل المحددة عند الجميع'});return;}
+    db.transaction(()=>{for(const m of rows){
+      if(parsed.data.action==='hide')db.prepare('INSERT OR IGNORE INTO message_hides(message_id,user_id,hidden_at) VALUES(?,?,?)').run(m.id,viewer.id,now);
+      if(parsed.data.action==='star')db.prepare('INSERT OR IGNORE INTO starred_messages(message_id,user_id,starred_at) VALUES(?,?,?)').run(m.id,viewer.id,now);
+      if(parsed.data.action==='delete'){
+        db.prepare("UPDATE messages SET body='',audio_asset_id=NULL,file_asset_id=NULL,filename_snapshot=NULL,deleted_at=?,deleted_by_id=? WHERE id=?").run(now,viewer.id,m.id);
+        db.prepare('DELETE FROM starred_messages WHERE message_id=?').run(m.id);
+        for(const assetId of [m.audio_asset_id,m.file_asset_id].filter(Boolean))db.prepare('DELETE FROM assets WHERE id=?').run(assetId);
+        db.prepare('DELETE FROM reactions WHERE message_id=?').run(m.id);
+        const key='pinned_message_'+m.channel;if(getSetting(db,key,'')===String(m.id))setSetting(db,key,'');
+      }
+    }})();
+    if(parsed.data.action==='delete'){for(const m of rows)hub.broadcastMessageUpdated(m.id,m.channel);hub.broadcastGroupSettingsUpdated();}
+    res.json({ok:true,count:rows.length});
+  });
+
+  const forwardSchema = z.object({ messageIds: z.array(z.number().int().positive()).min(1).max(20), channel: z.enum(CHANNEL_ENUM), requestKey: z.string().min(8).max(50) });
+  router.post('/chat/forward', requireAuth, (req: AuthenticatedRequest, res) => {
+    const parsed = forwardSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: 'اختر من رسالة إلى ٢٠ رسالة وقناة صحيحة' }); return; }
+    const viewer = req.authUser!, { channel, requestKey } = parsed.data;
+    const settings = readGroupChatSettings(db);
+    if (viewer.role === 'member' && (channel === 'announcements' || settings.chatLocked || isUserMutedInChat(db, viewer.id))) { res.status(403).json({ error: 'ليس لديك إذن الإرسال في القناة المطلوبة' }); return; }
+    const cutoff = getEffectiveCutoff(db, viewer, settings);
+    const rows = [...new Set(parsed.data.messageIds)].map(id => db.prepare('SELECT * FROM messages WHERE id=?').get(id) as any);
+    if (rows.some(m => !m || m.created_at < cutoff || !canViewerAccessMessage(db, viewer, m))) { res.status(403).json({ error: 'إحدى الرسائل غير متاحة لإعادة التوجيه' }); return; }
+    rows.sort((a,b) => a.id-b.id);
+    if (viewer.role === 'member' && !settings.allowMedia && rows.some(m => m.file_asset_id || m.audio_asset_id)) { res.status(403).json({ error: 'إرسال الوسائط معطل في القناة المطلوبة' }); return; }
+    const duplicates = rows.map(m => db.prepare('SELECT id FROM messages WHERE sender_id=? AND channel=? AND idempotency_key=?').get(viewer.id,channel,requestKey+':'+m.id) as any);
+    const assets = rows.map((m,i) => duplicates[i] ? [] : [m.audio_asset_id,m.file_asset_id].filter(Boolean).map(id => db.prepare('SELECT * FROM assets WHERE id=?').get(id) as any));
+    if (assets.some(a => a.some(x => !x))) { res.status(403).json({ error: 'المرفق الأصلي غير متاح' }); return; }
+    const needed = assets.flat().reduce((sum,a) => sum+a.byte_size,0);
+    const totals = db.prepare('SELECT COALESCE(SUM(byte_size),0) AS total, COALESCE(SUM(CASE WHEN uploader_id=? THEN byte_size ELSE 0 END),0) AS mine FROM assets').get(viewer.id) as any;
+    if ((config.maxStoredAssetBytes && totals.total+needed>config.maxStoredAssetBytes) || (config.maxUserStoredAssetBytes && totals.mine+needed>config.maxUserStoredAssetBytes)) { res.status(413).json({ error: 'إعادة توجيه المرفقات تتجاوز مساحة التخزين المتاحة' }); return; }
+    const now=Date.now();
+    const ids=db.transaction(() => rows.map((m,i) => {
+      if(duplicates[i]) return duplicates[i].id as number;
+      const copies=new Map<string,string>();
+      for(const a of assets[i]) {
+        const id='ast_'+randomUUID();copies.set(a.id,id);
+        db.prepare('INSERT INTO assets(id,uploader_id,detected_mime,original_safe_name,byte_size,kind,binding_type,binding_id,created_at,finalized_at) VALUES(?,?,?,?,?,?,\'pending\',NULL,?,?)').run(id,viewer.id,a.detected_mime,a.original_safe_name,a.byte_size,a.kind,now,now);
+        db.prepare('INSERT INTO asset_chunks(asset_id,sequence,data,byte_length,checksum) SELECT ?,sequence,data,byte_length,checksum FROM asset_chunks WHERE asset_id=?').run(id,a.id);
+      }
+      const info=db.prepare('INSERT INTO messages(channel,sender_id,sender_name_snapshot,body,audio_asset_id,file_asset_id,filename_snapshot,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(channel,viewer.id,viewer.displayName,'↪ مُعاد توجيهها\n'+m.body,m.audio_asset_id?copies.get(m.audio_asset_id):null,m.file_asset_id?copies.get(m.file_asset_id):null,m.filename_snapshot,requestKey+':'+m.id,now);
+      const id=Number(info.lastInsertRowid);
+      for(const a of assets[i]) db.prepare('UPDATE assets SET binding_type=?,binding_id=? WHERE id=?').run(a.id===m.audio_asset_id?'chat_audio':'chat_file',String(id),copies.get(a.id));
+      return id;
+    }))();
+    for(const id of ids) hub.broadcastMessageCreated(id,channel);
+    res.status(201).json({ok:true,messageIds:ids});
   });
 
   // Edit own non-deleted text message

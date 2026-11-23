@@ -1,0 +1,47 @@
+{
+  "name": "rahala-preview",
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/ws",
+      "/bootstrap-owner*"
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RAHALA",
+        "class_name": "RahalaApp"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "RahalaApp"
+      ]
+    }
+  ],
+  "alias": {
+    "./server/db.ts": "./cloudflare/db.ts",
+    "ws": "./cloudflare/ws-shim.ts"
+  },
+  "vars": {
+    "NODE_ENV": "production",
+    "RAHHALA_PREVIEW_DEMO": "false",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAGPMge1TxCwflWdT",
+    "OPEN_REGISTRATION": "false"
+  },
+  "observability": {
+    "enabled": false
+  }
+}

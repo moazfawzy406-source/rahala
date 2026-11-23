@@ -208,6 +208,8 @@ export type MajalisAccessType = 'open' | 'knock';
 export type MajalisLayoutMode = 'spotlight' | 'grid';
 
 export interface AppPublicConfig {
+  openRegistration?: boolean;
+  turnstileSiteKey?: string;
   brandName: string;
   tagline: string;
   institutionSubtitle: string;
@@ -509,4 +511,3 @@ export interface ConversationUnreadSummary {
   groupUnread: number;
   totalAll: number;
 }
-

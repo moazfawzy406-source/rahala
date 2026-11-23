@@ -1,3 +1,4 @@
+import {beginUpdateBlock} from '../hooks/useSilentPWAUpdate';
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -12,6 +13,13 @@ export class ApiError extends Error {
 let onUnauthorizedCallback: ((message: string) => void) | null = null;
 const SESSION_STORAGE_KEY = 'rahhala_session_token';
 let memorySessionToken: string | null = null;
+const sessionCleanups = new Set<() => void>();
+export function registerSessionCacheCleanup(fn: () => void): void { sessionCleanups.add(fn); }
+let cacheGeneration = 0;
+const readCache = new Map<string, { data: unknown; expires: number }>();
+const inflightReads = new Map<string, Promise<unknown>>();
+registerSessionCacheCleanup(() => { cacheGeneration++; readCache.clear(); inflightReads.clear(); });
+
 
 export function getStoredSessionToken(): string | null {
   if (memorySessionToken) return memorySessionToken;
@@ -28,6 +36,7 @@ export function getStoredSessionToken(): string | null {
 }
 
 export function setStoredSessionToken(token: string | null): void {
+  for (const cleanup of sessionCleanups) cleanup();
   memorySessionToken = token;
   try {
     if (token) {
@@ -55,7 +64,26 @@ export function setUnauthorizedHandler(cb: ((message: string) => void) | null): 
   onUnauthorizedCallback = cb;
 }
 
-export async function apiRequest<T>(
+type ApiOptions = { method?: string; body?: unknown; background?: boolean; signal?: AbortSignal; skipUnauthorizedHandler?: boolean };
+export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const method = options.method ?? 'GET';
+  const cacheable = method === 'GET' && path === '/api/resources/subjects' && !options.signal;
+  if (method !== 'GET' && (path.startsWith('/api/resources/') || path.startsWith('/api/auth/'))) { cacheGeneration++; readCache.clear(); inflightReads.clear(); }
+  if (!cacheable) return apiRequestUncached<T>(path, options);
+  const hit = readCache.get(path);
+  if (hit && hit.expires > Date.now()) return hit.data as T;
+  const pending = inflightReads.get(path);
+  if (pending) return pending as Promise<T>;
+  const epoch = cacheGeneration;
+  const request = apiRequestUncached<T>(path, options).then(data => {
+    if (epoch === cacheGeneration) readCache.set(path, { data, expires: Date.now() + 15_000 });
+    return data;
+  }).finally(() => { if (epoch === cacheGeneration) inflightReads.delete(path); });
+  inflightReads.set(path, request);
+  return request;
+}
+
+async function apiRequestUncached<T>(
   path: string,
   options: {
     method?: string;
@@ -115,7 +143,7 @@ export async function apiRequest<T>(
   return data as T;
 }
 
-export async function uploadAssetBinary(
+async function uploadAssetBinaryInternal(
   blob: Blob,
   filename: string,
   purpose: 'chat_file' | 'chat_audio' | 'avatar',
@@ -167,3 +195,5 @@ export async function fetchAssetAccessUrl(
   if (options.download) params.set('download', '1');
   return `/api/assets/${encodeURIComponent(assetId)}/content?${params.toString()}`;
 }
+
+export async function uploadAssetBinary(...args:Parameters<typeof uploadAssetBinaryInternal>){const done=beginUpdateBlock();try{return await uploadAssetBinaryInternal(...args);}finally{done();}}

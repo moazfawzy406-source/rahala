@@ -139,7 +139,7 @@ export function resolveActiveSession(
     return {
       ok: false,
       code: 'SESSION_IDLE_EXPIRED',
-      message: 'انتهت الجلسة بسبب عدم النشاط لمدة ساعتين، سجل دخول من جديد',
+      message: 'انتهت صلاحية الجلسة بعد فترة طويلة من عدم الاستخدام، سجل دخول من جديد',
     };
   }
 
@@ -205,6 +205,9 @@ export function createAuthMiddleware(db: RahhalaDb, config: RahhalaConfig) {
       return;
     }
 
+    // Renew both the server lease and persistent browser cookie on active use.
+    // Background polling does not keep an abandoned session alive.
+    if (!isBackground && rawToken) setSessionCookie(req, res, rawToken, config.sessionIdleMs);
     req.authUser = resolved.data.user;
     req.authSessionId = resolved.data.sessionId;
     next();

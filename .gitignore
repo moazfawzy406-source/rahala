@@ -14,3 +14,17 @@ logs/
 .env*
 !.env.example
 
+
+.wrangler/
+.cf-build/
+.dev.vars*
+
+# Android signing material never belongs in source
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+/node_modules

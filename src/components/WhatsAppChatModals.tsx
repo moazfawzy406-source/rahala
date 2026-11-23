@@ -93,7 +93,7 @@ export function NewDmModal({
       <div className="space-y-3">
         <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--success-soft)] border border-[var(--success)]/25 text-xs text-[var(--text-primary)]">
           <Icons.Lock className="w-4 h-4 text-[var(--success)] shrink-0" />
-          <span>المحادثات الخاصة بين الأعضاء مشفرة بتشفير AES-256-GCM ومقصورة على الطرفين فقط.</span>
+          <span>نصوص المحادثات الخاصة مشفرة عند التخزين على الخادم، وليست مشفرة من طرف لطرف.</span>
         </div>
 
         <input
@@ -359,10 +359,10 @@ export function EncryptionInfoModal({
             <Icons.ShieldCheck className="w-5 h-5" />
           </div>
           <div className="space-y-1 text-xs leading-relaxed text-[var(--text-primary)]">
-            <div className="font-extrabold text-sm">حماية موثقة بتشفير AES-256-GCM</div>
+            <div className="font-extrabold text-sm">تشفير نصوص الرسائل عند التخزين</div>
             <p className="text-[var(--text-secondary)]">
               تمتلك هذه المحادثة مفتاح تشفير مستقلاً (256-bit) ومغلفًا عبر اشتقاق HKDF-SHA256،
-              ويتم التحقق من سلامة كل رسالة ومنع وصول غير الأعضاء في الرسائل والمرفقات والبحث.
+              الخادم يدير المفتاح ويستطيع فك النصوص. المرفقات ليست مشفرة بهذا المفتاح، وتخضع لصلاحيات الوصول.
             </p>
           </div>
         </div>
@@ -370,7 +370,7 @@ export function EncryptionInfoModal({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[var(--text-secondary)]">
-              رمز الأمان الخاص بالمحادثة (٦٠ رقمًا)
+              بصمة مفتاح التخزين (ليست تحققًا من هوية الطرف الآخر)
             </span>
             <button
               type="button"
@@ -674,7 +674,7 @@ export function CustomGroupInfoModal({
                   التشفير والأمان
                 </div>
                 <div className="text-[11px] text-[var(--text-secondary)]">
-                  الرسائل والملفات مشفرة بـ AES-256-GCM · اضغط للتحقق من رمز الأمان
+                  النصوص مشفرة على الخادم، وليس من طرف لطرف · التفاصيل
                 </div>
               </div>
             </div>

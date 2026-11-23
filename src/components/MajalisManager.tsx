@@ -86,6 +86,7 @@ function useStreamAudioLevel(stream: MediaStream | null, active: boolean): numbe
     if (!AudioCtx) return;
 
     let rafId = 0;
+    let lastSample = 0;
     let closed = false;
     let ctx: AudioContext | null = null;
 
@@ -97,8 +98,10 @@ function useStreamAudioLevel(stream: MediaStream | null, active: boolean): numbe
       source.connect(analyser);
       const data = new Uint8Array(analyser.frequencyBinCount);
 
-      const sample = () => {
+      const sample = (time: number) => {
         if (closed) return;
+        if (time - lastSample < 100 || document.hidden) { rafId = window.requestAnimationFrame(sample); return; }
+        lastSample = time;
         analyser.getByteFrequencyData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
@@ -106,7 +109,7 @@ function useStreamAudioLevel(stream: MediaStream | null, active: boolean): numbe
         }
         const avg = sum / data.length;
         const pct = Math.min(100, Math.round((avg / 64) * 100));
-        setLevel(pct);
+        setLevel(previous => Math.abs(previous - pct) >= 4 || (pct === 0 && previous !== 0) ? pct : previous);
         rafId = window.requestAnimationFrame(sample);
       };
       rafId = window.requestAnimationFrame(sample);
@@ -2734,7 +2737,7 @@ export function MajalisView({
   if (!controller.joined) {
     return (
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div data-pinned="majalis-lobby-header" className="rahhala-sticky-toolbar flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--text-primary)] leading-tight">
               مجالس المذاكرة الجماعية
@@ -3094,9 +3097,9 @@ export function MajalisView({
   const canSendChat = controller.isHost || roomSettings.allowChat;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-40">
       {/* Top Meeting Bar */}
-      <div className="rahhala-card p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3">
+      <div data-pinned="meeting-header" className="rahhala-card rahhala-sticky-toolbar p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
             <span className="font-bold text-[var(--accent)]">
@@ -3273,7 +3276,7 @@ export function MajalisView({
       {/* Workspace Split: Main Media Stage + Companion Drawer (Chat / People / Host Controls / Timer) */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_350px] gap-4 items-start">
         {/* Left/Main Stage with Floating Emoji Reactions */}
-        <div className="relative space-y-3.5 min-w-0">
+        <div className="relative space-y-3.5 min-w-0 flex flex-col max-h-[calc(100dvh-270px)] overflow-y-auto overscroll-contain">
           {controller.reactions.length > 0 && (
             <div
               aria-hidden="true"
@@ -3391,7 +3394,7 @@ export function MajalisView({
           )}
 
           {/* Bottom Google Meet Control Dock */}
-          <div className="rahhala-card p-2.5 sm:p-3 flex flex-wrap items-center justify-center gap-2 relative">
+          <div data-pinned="meeting-controls" className="rahhala-card p-2.5 sm:p-3 flex flex-wrap items-center justify-center gap-2 fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-3 right-3 md:bottom-4 md:left-6 md:right-[264px] z-30">
             {config.meetingMode === 'builtin' && (
               <>
                 <button
@@ -3573,11 +3576,11 @@ export function MajalisView({
         </div>
 
         {/* Right Google Meet Drawer: Tabs (Chat / People / Host Controls / Timer) */}
-        <aside className="rahhala-card overflow-hidden flex flex-col">
+        <aside className="rahhala-card overflow-hidden flex flex-col lg:sticky lg:top-28 max-h-[calc(100dvh-270px)]">
           <div
             role="tablist"
             aria-label="أدوات المجلس"
-            className="grid border-b border-[var(--divider)] bg-[var(--bg-surface)]/60"
+            className="grid shrink-0 border-b border-[var(--divider)] bg-[var(--bg-surface)]/60"
             style={{
               gridTemplateColumns: `repeat(${controller.isHost ? 4 : 3}, minmax(0, 1fr))`,
             }}
@@ -3652,7 +3655,7 @@ export function MajalisView({
 
           {/* Tab 1: Room Chat */}
           {sidePanel === 'chat' && (
-            <div className="p-4 flex flex-col h-[460px]">
+            <div className="p-4 flex flex-col h-[460px] min-h-0">
               <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[var(--divider)]">
                 <h2 className="text-sm font-extrabold text-[var(--text-primary)]">
                   محادثة المجلس

@@ -251,3 +251,20 @@ textarea:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+
+/* Scroll within the viewport shell. Keep only the active screen's controls pinned. */
+.rahhala-sticky-toolbar {
+  position: sticky;
+  top: -1rem;
+  z-index: 20;
+  background-color: var(--bg-page);
+  border-bottom: 1px solid var(--divider);
+  padding-block: 0.65rem;
+  isolation: isolate;
+}
+
+@media (min-width: 640px) { .rahhala-sticky-toolbar { top: -1.5rem; } }
+
+/* Respect the in-app palette instead of browser automatic darkening. */
+html[data-theme="light"],html[data-theme="sepia"] { color-scheme: only light; }
+html[data-theme="dark"],html[data-theme="warm-night"] { color-scheme: dark; }

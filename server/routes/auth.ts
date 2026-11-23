@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { RahhalaConfig } from '../config.ts';
-import { getOrCreateSigningSecret, getSetting, type RahhalaDb } from '../db.ts';
+import { getOrCreateSigningSecret, getSetting, type RahhalaDb } from '../db-core.ts';
 import {
   generateOpaqueToken,
   hashPassword,
@@ -63,7 +63,7 @@ export function createAuthRouter(
   const LOGIN_WINDOW_MS = 15 * 60 * 1000;
   const LOGIN_LOCK_MS = 10 * 60 * 1000;
 
-  const REG_MAX_ATTEMPTS = 12;
+  const REG_MAX_ATTEMPTS = config.openRegistration ? 800 : 12;
   const REG_WINDOW_MS = 60 * 60 * 1000;
   const REG_LOCK_MS = 15 * 60 * 1000;
 
@@ -123,6 +123,8 @@ export function createAuthRouter(
       defaultRoomAccessType,
       iceServers,
       emailRecoveryEnabled: false,
+      openRegistration:Boolean(config.openRegistration),
+      turnstileSiteKey:config.openRegistration?config.turnstileSiteKey??'':'',
       previewDemoEnabled: config.previewDemoEnabled && !config.isProduction,
     });
   });
@@ -131,16 +133,18 @@ export function createAuthRouter(
     .object({
       displayName: displayNameSchema,
       username: usernameSchema,
-      email: emailSchema,
+      email: emailSchema.optional(),
       password: passwordSchema,
       confirmPassword: z.string(),
+      turnstileToken:z.string().max(2048).optional(),
     })
     .refine((d) => d.password === d.confirmPassword, {
       message: 'كلمتا المرور غير متطابقتين',
       path: ['confirmPassword'],
     });
 
-  router.post('/auth/register', (req, res) => {
+  router.post('/auth/register', async (req, res, next) => {
+    try {
     const ipKey = `register:ip:${req.ip || 'unknown'}`;
     const rate = checkRateLimit(db, ipKey, REG_MAX_ATTEMPTS, REG_WINDOW_MS, REG_LOCK_MS);
     if (!rate.allowed) {
@@ -156,7 +160,19 @@ export function createAuthRouter(
       return;
     }
 
-    const { displayName, username, email, password } = parsed.data;
+    const usernameBucket='register:user:'+normalizeUsername(parsed.data.username);
+    if(!checkRateLimit(db,usernameBucket,8,15*60000,15*60000).allowed){res.status(429).json({error:'محاولات كثيرة، حاول لاحقًا'});return;}
+    recordFailedAttempt(db,usernameBucket,8,15*60000,15*60000);
+    const open=Boolean(config.openRegistration);
+    if(open){
+      if(getSetting(db,'registration_paused','false')==='true'){res.status(503).json({error:'التسجيل متوقف مؤقتًا، حاول لاحقًا'});return;}
+      if(!config.turnstileSecret||!config.turnstileSiteKey){res.status(503).json({error:'التسجيل غير متاح مؤقتًا'});return;}
+      const globalKey='register:global';if(!checkRateLimit(db,globalKey,120,60000,60000).allowed){res.status(429).json({error:'التسجيل مشغول، حاول بعد دقيقة'});return;}recordFailedAttempt(db,globalKey,120,60000,60000);
+      try{const response=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({secret:config.turnstileSecret,response:parsed.data.turnstileToken??'',remoteip:req.ip??''}),signal:AbortSignal.timeout(10000)});const result=await response.json() as any;const host=req.get('host')?.split(':')[0];if(!response.ok||!result.success||result.hostname!==host||result.action!=='register'){recordFailedAttempt(db,ipKey,REG_MAX_ATTEMPTS,REG_WINDOW_MS,REG_LOCK_MS);res.status(400).json({error:'أعد التحقق الأمني ثم حاول مرة أخرى'});return;}}catch{res.status(503).json({error:'تعذر التحقق الأمني، حاول لاحقًا'});return;}
+    }
+    if(open&&getSetting(db,'registration_paused','false')==='true'){res.status(503).json({error:'التسجيل متوقف مؤقتًا'});return;}
+    const { displayName, username, password } = parsed.data;
+    const email = parsed.data.email ?? `${username}@no-email.invalid`;
 
     const existingUsername = db
       .prepare('SELECT id FROM users WHERE username = ?')
@@ -180,19 +196,28 @@ export function createAuthRouter(
     const userId = `usr_${randomUUID()}`;
     const passwordHash = hashPassword(password);
 
-    // Public registration NEVER assigns admin or owner; always member + pending
-    db.prepare(
+    // Existing pending accounts are unchanged; this switch applies only to newly inserted members.
+    const recoveryCode=open?generateOpaqueToken(24):null;
+    db.transaction(()=>{db.prepare(
       `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, avatar_asset_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'member', 'pending', 0, '', NULL, ?, ?)`
-    ).run(userId, displayName, username, email, passwordHash, now, now);
-
+       VALUES (?, ?, ?, ?, ?, 'member', ?, 0, '', NULL, ?, ?)`
+    ).run(userId, displayName, username, email, passwordHash,open?'approved':'pending', now, now);
+    if(recoveryCode){db.prepare('INSERT INTO account_recovery VALUES(?,?,?)').run(userId,sha256Hex(recoveryCode),now);const id='signup_'+randomUUID();db.prepare('INSERT INTO signup_outbox(id,user_id,payload,created_at) VALUES(?,?,?,?)').run(id,userId,JSON.stringify({eventId:id,userId,name:displayName,username,signupTime:new Date(now).toISOString(),recoveryEnabled:true}),now);}})();
     recordFailedAttempt(db, ipKey, REG_MAX_ATTEMPTS, REG_WINDOW_MS, REG_LOCK_MS);
-
-    res.status(201).json({
-      message: 'تم إنشاء حسابك بنجاح! حسابك بانتظار موافقة المشرف.',
-      approvalStatus: 'pending',
-    });
+    hub.broadcastAdminRequestsUpdated?.();
+    res.setHeader('Cache-Control','no-store');res.status(201).json({message:open?'تم إنشاء حسابك. احفظ كود الاسترجاع ثم ادخل مباشرة.':'تم إنشاء حسابك بنجاح! حسابك بانتظار موافقة المشرف.',approvalStatus:open?'approved':'pending',...(recoveryCode?{recoveryCode}:{})});
+    } catch(error){next(error);}
   });
+
+  router.post('/auth/recover',(req,res)=>{const parsed=z.object({username:z.string().trim().min(1).max(40),recoveryCode:z.string().min(20).max(128),password:passwordSchema,confirmPassword:z.string()}).safeParse(req.body);if(!parsed.success||parsed.data.password!==parsed.data.confirmPassword){res.status(400).json({error:'تحقق من بيانات الاسترجاع وكلمتي المرور'});return;}const username=normalizeUsername(parsed.data.username),ip='recover:ip:'+(req.ip??'unknown'),key='recover:user:'+username;for(const k of [ip,key]){if(!checkRateLimit(db,k,6,15*60000,15*60000).allowed){res.status(429).json({error:'محاولات كثيرة، حاول لاحقًا'});return;}}
+    for(const k of [ip,key])recordFailedAttempt(db,k,6,15*60000,15*60000);
+    const user=db.prepare("SELECT u.id,u.role,r.code_hash FROM users u JOIN account_recovery r ON r.user_id=u.id WHERE u.username=? AND u.approval_status='approved' AND u.role='member'").get(username) as any;
+    if(!user||!timingSafeEqual(Buffer.from(sha256Hex(parsed.data.recoveryCode.trim())),Buffer.from(user.code_hash))){res.status(400).json({error:'اسم المستخدم أو كود الاسترجاع غير صالح'});return;}
+    const now=Date.now(),replacement=generateOpaqueToken(24),hash=hashPassword(parsed.data.password);
+    db.transaction(()=>{const changed=db.prepare('UPDATE account_recovery SET code_hash=?,created_at=? WHERE user_id=? AND code_hash=?').run(sha256Hex(replacement),now,user.id,user.code_hash);if(changed.changes!==1)throw new Error('Recovery already used');db.prepare('UPDATE users SET password_hash=?,updated_at=? WHERE id=?').run(hash,now,user.id);db.prepare('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(now,user.id);})();hub.notifyUserSessionsRevoked(user.id);res.setHeader('Cache-Control','no-store');res.json({ok:true,recoveryCode:replacement});
+  });
+
+  router.post('/auth/recovery-code',requireAuth,(req:AuthenticatedRequest,res)=>{const bucket='recovery-rotate:'+req.authUser!.id;if(!checkRateLimit(db,bucket,5,900000,900000).allowed){res.sendStatus(429);return;}recordFailedAttempt(db,bucket,5,900000,900000);const p=z.object({password:z.string().min(1).max(256)}).safeParse(req.body);const u=req.authUser!;const row=db.prepare('SELECT password_hash FROM users WHERE id=?').get(u.id) as any;if(u.role!=='member'||!p.success||!verifyPassword(p.data.password,row.password_hash)){res.status(403).json({error:'تحقق من كلمة المرور الحالية'});return;}const code=generateOpaqueToken(24);db.prepare('INSERT INTO account_recovery VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,created_at=excluded.created_at').run(u.id,sha256Hex(code),Date.now());res.setHeader('Cache-Control','no-store');res.json({recoveryCode:code});});
 
   const loginBodySchema = z.object({
     username: z.string().trim().min(1, 'اكتب اسم المستخدم'),
@@ -489,7 +514,7 @@ export function createAuthRouter(
       } else {
         const asset = db
           .prepare(
-            "SELECT id, uploader_id, kind FROM assets WHERE id = ? AND uploader_id = ? AND kind IN ('image', 'avatar')"
+            "SELECT id, uploader_id, kind FROM assets WHERE id = ? AND uploader_id = ? AND kind IN ('image', 'avatar') AND NOT EXISTS(SELECT 1 FROM group_message_assets WHERE asset_id=assets.id)"
           )
           .get(parsed.data.avatarAssetId, userId) as
           | { id: string; uploader_id: string; kind: string }

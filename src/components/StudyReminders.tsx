@@ -447,7 +447,9 @@ export function StudyAlarmBanner({
   onSnooze: (id: string, minutes?: number) => Promise<void>;
   onComplete: (id: string) => Promise<void>;
 }) {
-  const current = alerts[0];
+  const [dismissed,setDismissed]=useState<Set<string>>(new Set());
+  const current = alerts.find(a=>!dismissed.has(a.id));
+  const dismiss=()=>{if(current)setDismissed(prev=>new Set([...prev,current.id]));};
   const alertColor = current ? getSubjectColor(current.subjectId) : '#E3B23C';
   const alertTone = current ? getSubjectTone(current.subjectId) : 'chime';
 
@@ -456,14 +458,20 @@ export function StudyAlarmBanner({
       {current && (
         <motion.div
           key={current.id}
+          drag="x"
+          dragConstraints={{left:0,right:0}}
+          dragElastic={.8}
+          dragMomentum={false}
+          onDragEnd={(_event,info)=>{if(Math.abs(info.offset.x)>85||(Math.abs(info.offset.x)>30&&Math.abs(info.velocity.x)>450))dismiss();}}
           initial={{ opacity: 0, y: -16, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -16, scale: 0.96 }}
+          exit={{ opacity: 0, x: 360, scale: 0.96 }}
           transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
           role="alertdialog"
           aria-label="تنبيه موعد المذاكرة"
           className="fixed top-16 left-1/2 -translate-x-1/2 z-40 w-[min(92vw,30rem)] rahhala-glass-panel p-4 shadow-2xl overflow-hidden"
           style={{
+            touchAction:'pan-y',
             borderColor: `${alertColor}77`,
             boxShadow: `0 18px 44px -12px ${alertColor}40, var(--glass-shadow)`,
           }}
@@ -494,6 +502,7 @@ export function StudyAlarmBanner({
                   </span>
                   {alerts.length > 1 ? ` · (${alerts.length})` : ''}
                 </div>
+                <button type="button" aria-label="إخفاء التنبيه" onClick={dismiss} className="min-w-[32px] min-h-[32px] flex items-center justify-center text-[var(--text-secondary)]"><Icons.X className="w-4 h-4"/></button>
                 {alertTone !== 'silent' && (
                   <button
                     type="button"

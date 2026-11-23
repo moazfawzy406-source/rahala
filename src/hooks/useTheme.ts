@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { ThemeId } from '../../shared/types';
 
 const STORAGE_KEY = 'rahhala_theme';
@@ -24,8 +24,11 @@ function readStoredTheme(): ThemeId {
 export function useTheme() {
   const [theme, setTheme] = useState<ThemeId>(readStoredTheme);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    const scheme=(theme==='light'||theme==='sepia')?'only light':'dark';
+    document.documentElement.style.colorScheme=scheme;
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content',scheme);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) {
       meta.setAttribute('content', THEME_META_COLORS[theme]);

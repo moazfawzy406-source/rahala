@@ -28,6 +28,9 @@ export function AdminView({
   onToast: (msg: string, isError?: boolean) => void;
   onRequestsBadgeChange: (count: number) => void;
 }) {
+  const [registration,setRegistration]=useState<any>(null);
+  const loadRegistration=useCallback(async()=>{if(user.role!=='owner')return;try{setRegistration(await apiRequest('/api/admin/registration'));}catch{}},[user.role]);
+  useEffect(()=>{void loadRegistration();},[loadRegistration]);
   const [openAcc, setOpenAcc] = useState<string>('registrations');
   const [pendingUsers, setPendingUsers] = useState<PendingUserRecord[]>([]);
   const [pendingHistory, setPendingHistory] = useState<HistoryRequestRecord[]>([]);
@@ -373,7 +376,7 @@ export function AdminView({
 
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
-      <div className="px-1">
+      <div data-pinned="admin-header" className="rahhala-sticky-toolbar px-1">
         <h1 className="text-xl font-extrabold text-[var(--text-primary)]">لوحة الإدارة</h1>
         <p className="text-xs text-[var(--text-secondary)] mt-0.5">
           إدارة طلبات الانضمام، صلاحيات الرسائل القديمة، والمواد الدراسية.
@@ -402,7 +405,7 @@ export function AdminView({
                   <div className="text-xs text-[var(--text-secondary)] flex flex-wrap gap-2 mt-0.5">
                     <span dir="ltr">@{u.username}</span>
                     <span>·</span>
-                    <span dir="ltr">{u.email}</span>
+                    <span hidden dir="ltr">{u.email}</span>
                     <span>·</span>
                     <span>{formatDateTime(u.createdAt)}</span>
                   </div>
@@ -693,6 +696,8 @@ export function AdminView({
           </button>
         </form>
       </AccordionItem>
+
+      {user.role==='owner'&&<AccordionItem id="signup-security" title="التسجيل وسجل الحسابات"><div className="space-y-3 text-sm"><p>دخول الحسابات الجديدة: {registration?.enabled?'مباشر بعد التحقق الأمني':'بانتظار الموافقة'}</p><p>مزامنة سجل التسجيل: {registration?.syncConfigured?'مُعدّة':'لم تُربط بعد'} · المتبقي: {registration?.outbox?.pending??'…'}</p><p className="text-xs text-[var(--text-secondary)]">السجل لا يحتوي على كلمات المرور أو أكواد الاسترجاع. حسابات الانتظار الحالية لا تتغير.</p><div className="flex gap-2"><button className="min-h-[44px] px-3 rounded-xl bg-[var(--bg-surface)]" onClick={()=>void loadRegistration()}>تحديث الحالة</button><button disabled={!registration?.enabled} className="min-h-[44px] px-3 rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] disabled:opacity-50" onClick={async()=>{try{await apiRequest('/api/admin/registration',{method:'PATCH',body:{paused:!registration?.paused}});await loadRegistration();}catch(e){onToast(e instanceof Error?e.message:'تعذر التحديث',true);}}}>{registration?.paused?'استئناف التسجيل':'إيقاف التسجيل مؤقتًا'}</button></div></div></AccordionItem>}
 
       {/* 6. إعدادات الهوية ومجلس المذاكرة */}
       <AccordionItem id="settings" title="إعدادات المنصة ومجلس المذاكرة">

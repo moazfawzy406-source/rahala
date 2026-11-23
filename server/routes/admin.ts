@@ -11,8 +11,8 @@ const ZipArchiveCtor = (
   }
 ).ZipArchive;
 import type { RahhalaConfig } from '../config.ts';
-import { setSetting, type RahhalaDb } from '../db.ts';
-import { hashPassword } from '../lib/crypto.ts';
+import { getSetting, setSetting, type RahhalaDb } from '../db-core.ts';
+import { generateOpaqueToken, sha256Hex, hashPassword } from '../lib/crypto.ts';
 import { emailSchema, isSafeHttpUrl, passwordSchema } from '../lib/validation.ts';
 import { type AuthenticatedRequest, createAuthMiddleware } from '../middleware/auth.ts';
 import type { RealtimeHub } from '../ws.ts';
@@ -319,6 +319,10 @@ export function createAdminRouter(
     }
   );
 
+  router.post('/admin/members/:id/recovery-code',requireAuth,requireAdminOrOwner,(req:AuthenticatedRequest,res)=>{const actor=req.authUser!;if(actor.role!=='owner'){res.status(403).json({error:'متاح للمالك فقط'});return;}const id=String(req.params.id),target=db.prepare("SELECT id FROM users WHERE id=? AND role='member' AND approval_status='approved'").get(id);if(!target){res.status(404).json({error:'حساب عضو مفعل غير موجود'});return;}const code=generateOpaqueToken(24);db.transaction(()=>{db.prepare('INSERT INTO account_recovery VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,created_at=excluded.created_at').run(id,sha256Hex(code),Date.now());db.prepare('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(Date.now(),id);writeAudit(db,actor.id,'member_recovery_rotated',id);})();hub.notifyUserSessionsRevoked(id);res.setHeader('Cache-Control','no-store');res.json({recoveryCode:code});});
+  router.get('/admin/registration',requireAuth,requireAdminOrOwner,(req:AuthenticatedRequest,res)=>{if(req.authUser!.role!=='owner'){res.sendStatus(403);return;}const counts=db.prepare('SELECT count(*) pending,min(created_at) oldest FROM signup_outbox WHERE synced_at IS NULL').get();res.json({enabled:!!config.openRegistration,paused:getSetting(db,'registration_paused','false')==='true',syncConfigured:!!(config.signupWebhookUrl&&config.signupWebhookSecret),outbox:counts});});
+  router.patch('/admin/registration',requireAuth,requireAdminOrOwner,(req:AuthenticatedRequest,res)=>{if(req.authUser!.role!=='owner'){res.sendStatus(403);return;}const p=z.object({paused:z.boolean()}).safeParse(req.body);if(!p.success){res.sendStatus(400);return;}setSetting(db,'registration_paused',String(p.data.paused));writeAudit(db,req.authUser!.id,'registration_pause_changed',String(p.data.paused));res.json({ok:true});});
+
   // Administrative temporary password reset (admin for member; owner for admin/member; never owner)
   router.post(
     '/admin/members/:id/reset-password',
@@ -363,6 +367,7 @@ export function createAdminRouter(
         db.prepare(
           'UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL'
         ).run(now, targetId);
+        db.prepare('DELETE FROM account_recovery WHERE user_id=?').run(targetId);
         // Never log plaintext password!
         writeAudit(db, actor.id, 'member_password_reset', targetId);
       });

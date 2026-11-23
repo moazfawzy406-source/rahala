@@ -1,7 +1,7 @@
 import express, { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import type { RahhalaConfig } from '../config.ts';
-import { getOrCreateSigningSecret, type RahhalaDb } from '../db.ts';
+import { getOrCreateSigningSecret, type RahhalaDb } from '../db-core.ts';
 import { sha256Hex, signShortToken, verifyShortToken } from '../lib/crypto.ts';
 import { detectAndValidateFile } from '../lib/fileValidation.ts';
 import { canViewerAccessAsset, getHistoryCutoff } from '../lib/historyAccess.ts';
@@ -90,8 +90,8 @@ export function createAssetsRouter(db: RahhalaDb, config: RahhalaConfig): Router
         res.status(413).json({
           error:
             purpose === 'chat_audio'
-              ? 'حجم التسجيل الصوتي يتجاوز الحد الأقصى (١٢ ميجابايت)'
-              : 'حجم الملف يتجاوز الحد الأقصى المسموح به (٢٥ ميجابايت)',
+              ? `حجم التسجيل الصوتي يتجاوز الحد (${maxBytes / 1_000_000} MB)`
+              : `حجم الملف يتجاوز الحد (${maxBytes / 1_000_000} MB)`,
         });
         return;
       }
@@ -140,6 +140,10 @@ export function createAssetsRouter(db: RahhalaDb, config: RahhalaConfig): Router
     const assetId = `ast_${randomUUID()}`;
     const storedKind = purpose === 'avatar' ? 'avatar' : detected.kind;
 
+    if(config.maxStoredAssetBytes || config.maxUserStoredAssetBytes) {
+      const totals = db.prepare('SELECT COALESCE(SUM(byte_size),0) AS total, COALESCE(SUM(CASE WHEN uploader_id=? THEN byte_size ELSE 0 END),0) AS mine FROM assets').get(req.authUser!.id) as {total:number;mine:number};
+      if((config.maxStoredAssetBytes && totals.total+buf.length>config.maxStoredAssetBytes) || (config.maxUserStoredAssetBytes && totals.mine+buf.length>config.maxUserStoredAssetBytes)) { res.status(413).json({error:'مساحة المرفقات التجريبية ممتلئة. استخدم رابطًا أو احذف مرفقات قديمة.'}); return; }
+    }
     const tx = db.transaction(() => {
       db.prepare(
         `INSERT INTO assets (id, uploader_id, detected_mime, original_safe_name, byte_size, kind, binding_type, binding_id, created_at, finalized_at)

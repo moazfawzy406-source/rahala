@@ -54,7 +54,6 @@ export function PWAInstallButton() {
 }
 
 export function PWAStatusBanners({ isOnline }: { isOnline: boolean }) {
-  const { updateAvailable, applyUpdate, dismissUpdate } = usePWAInstall();
 
   return (
     <>
@@ -67,30 +66,7 @@ export function PWAStatusBanners({ isOnline }: { isOnline: boolean }) {
         </div>
       )}
 
-      {updateAvailable && (
-        <div
-          role="status"
-          className="bg-[var(--accent-soft)] border-b border-[var(--accent)]/30 px-4 py-2 flex flex-wrap items-center justify-center gap-3 text-xs"
-        >
-          <span className="font-bold text-[var(--text-primary)]">
-            يتوفر تحديث جديد لتطبيق رَحّالَة
-          </span>
-          <button
-            type="button"
-            onClick={applyUpdate}
-            className="min-h-[32px] px-3 rounded-lg bg-[var(--accent)] text-[var(--accent-fg)] font-bold"
-          >
-            تحديث الآن
-          </button>
-          <button
-            type="button"
-            onClick={dismissUpdate}
-            className="min-h-[32px] px-2 text-[var(--text-secondary)] font-semibold"
-          >
-            لاحقًا
-          </button>
-        </div>
-      )}
+
     </>
   );
 }

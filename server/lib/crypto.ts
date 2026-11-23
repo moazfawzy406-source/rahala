@@ -162,4 +162,3 @@ export function decryptMessageBody(
   if (!cipherPayload) return '';
   return aesGcmDecrypt(cipherPayload, rawKey, aadContext).toString('utf8');
 }
-

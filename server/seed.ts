@@ -1,6 +1,8 @@
+import catalogData from '../catalog/real-catalog.json';
+const catalog: {subjects: Array<{id:string;name:string;color:string;ord:number}>; sections:Array<{id:string;subject_id:string;label:string;ord:number}>; materials:Array<{id:string;subject_id:string;section_id:string;title:string;kind:string;url:string;note:string|null;ord:number}>} = catalogData;
 import crypto from 'node:crypto';
 import type { RahhalaConfig } from './config.ts';
-import { getSetting, setSetting, type RahhalaDb } from './db.ts';
+import { getSetting, setSetting, type RahhalaDb } from './db-core.ts';
 import { hashPassword } from './lib/crypto.ts';
 import { isSafeHttpUrl } from './lib/validation.ts';
 
@@ -19,82 +21,25 @@ export function seedInitialData(db: RahhalaDb, config: RahhalaConfig): void {
     setSetting(db, 'meeting_provider_url', config.meetingProviderUrl);
   }
 
-  // Seed fictional academic subjects if empty
+  // Seed generic sample subjects only into an empty database. Real material data stays out of the public repository.
   const subjectCount = (db.prepare('SELECT COUNT(*) AS cnt FROM subjects').get() as { cnt: number }).cnt;
   if (subjectCount === 0) {
     const now = Date.now();
     const tx = db.transaction(() => {
-      const subjects = [
-        { id: 'subj_fiqh', name: 'أصول الفقه', color: '#E3B23C', icon: 'book-open', order: 1 },
-        { id: 'subj_balagha', name: 'البلاغة العربية', color: '#5FBF8F', icon: 'feather', order: 2 },
-        { id: 'subj_hadith', name: 'الحديث وعلومه', color: '#6AA7E8', icon: 'scroll', order: 3 },
-        { id: 'subj_history', name: 'تاريخ التشريع', color: '#D9825B', icon: 'landmark', order: 4 },
-      ];
-
-      const insertSubj = db.prepare(
-        'INSERT INTO subjects (id, name, accent_color, icon_name, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      );
-      const insertSec = db.prepare(
-        'INSERT INTO sections (id, subject_id, label, sort_order) VALUES (?, ?, ?, ?)'
-      );
-      const insertMat = db.prepare(
-        `INSERT INTO materials (id, subject_id, section_id, title, kind, url, note, creator_id, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`
-      );
-
-      for (const s of subjects) {
-        insertSubj.run(s.id, s.name, s.color, s.icon, s.order, now);
-        const secSummaries = `${s.id}_summaries`;
-        const secLectures = `${s.id}_lectures`;
-        const secSources = `${s.id}_sources`;
-        insertSec.run(secSummaries, s.id, 'ملخصات', 1);
-        insertSec.run(secLectures, s.id, 'محاضرات', 2);
-        insertSec.run(secSources, s.id, 'مصادر', 3);
-
-        insertMat.run(
-          `${s.id}_m1`,
-          s.id,
-          secSummaries,
-          `ملخص تمهيدي في ${s.name}`,
-          'pdf',
-          'https://example.edu/rahhala-demo/summary.pdf',
-          'ملخص تجريبي لأغراض المعاينة فقط',
-          1,
-          now,
-          now
-        );
-        insertMat.run(
-          `${s.id}_m2`,
-          s.id,
-          secLectures,
-          `تسجيل المحاضرة الأولى — ${s.name}`,
-          'video',
-          'https://example.edu/rahhala-demo/lecture-1',
-          'محاضرة تجريبية منظمة حسب المنهج',
-          1,
-          now,
-          now
-        );
-        insertMat.run(
-          `${s.id}_m3`,
-          s.id,
-          secSources,
-          `مرجع القراءة الأساسي — ${s.name}`,
-          'drive',
-          'https://example.edu/rahhala-demo/reference',
-          '',
-          1,
-          now,
-          now
-        );
-      }
+      const insSubject = db.prepare('INSERT INTO subjects(id,name,accent_color,icon_name,sort_order,created_at) VALUES(?,?,?,?,?,?)');
+      const insSection = db.prepare('INSERT INTO sections(id,subject_id,label,sort_order) VALUES(?,?,?,?)');
+      const insMaterial = db.prepare('INSERT INTO materials(id,subject_id,section_id,title,kind,url,note,creator_id,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,?,?,?)');
+      for(const s of catalog.subjects) insSubject.run(s.id,s.name,s.color,'book-open',s.ord,now);
+      for(const s of catalog.sections) insSection.run(s.id,s.subject_id,s.label,s.ord);
+      // Old timestamps have no timezone, so preserve original JSON provenance and use import time.
+      for(const m of catalog.materials) insMaterial.run(m.id,m.subject_id,m.section_id,m.title,m.kind,m.url,m.note ?? '',m.ord,now,now);
     });
     tx();
   }
 
-  // Only in non-production preview mode when no users exist yet: seed fictional demo accounts
+  // Legacy fictional preview seed retained but disabled after adopting the real catalog.
   // Passwords are generated randomly at runtime (never hardcoded in source).
-  if (config.previewDemoEnabled) {
+  if (config.previewDemoEnabled && false) {
     const userCount = (db.prepare('SELECT COUNT(*) AS cnt FROM users').get() as { cnt: number }).cnt;
     if (userCount === 0) {
       const now = Date.now();
@@ -415,7 +360,7 @@ export function seedInitialData(db: RahhalaDb, config: RahhalaConfig): void {
     txRooms();
   }
 
-  if (config.previewDemoEnabled) {
+  if (config.previewDemoEnabled && false) {
     const majalisMsgCount = (
       db.prepare('SELECT COUNT(*) AS cnt FROM majalis_messages').get() as { cnt: number }
     ).cnt;

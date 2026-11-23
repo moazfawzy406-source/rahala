@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { registerSW } from 'virtual:pwa-register';
+
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -35,16 +35,6 @@ export function usePWAInstall() {
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
 
-    try {
-      const updateSW = registerSW({
-        onNeedRefresh() {
-          setUpdateAvailable(true);
-        },
-      });
-      setUpdateFn(() => updateSW);
-    } catch {
-      // Ignore SW registration failure in unsupported environments
-    }
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
