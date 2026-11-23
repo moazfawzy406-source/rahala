@@ -2,7 +2,15 @@ node_modules/
 build/
 dist/
 coverage/
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*-wal
+*-shm
 .DS_Store
 *.log
 .env*
 !.env.example
+

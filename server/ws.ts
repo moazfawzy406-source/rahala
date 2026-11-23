@@ -50,6 +50,8 @@ export interface RealtimeHub {
   broadcastReceiptUpdated: (senderId: string, messageId: number) => void;
   broadcastTyping: (channel: ChannelId, userId: string, displayName: string, active: boolean) => void;
   broadcastChatLockChanged: (locked: boolean) => void;
+  broadcastGroupSettingsUpdated: () => void;
+  broadcastChannelWiped: (channel: ChannelId | 'all') => void;
   broadcastChallengesUpdated: () => void;
   getMajalisRoomsSnapshot: () => MajalisRoomSummary[];
   broadcastMajalisLobbyUpdated: () => void;
@@ -752,6 +754,16 @@ export function setupWebSocketHub(
     broadcastChatLockChanged(locked) {
       for (const client of clients) {
         sendToClient(client, { type: 'chat:lock_changed', locked });
+      }
+    },
+    broadcastGroupSettingsUpdated() {
+      for (const client of clients) {
+        sendToClient(client, { type: 'chat:group_settings_updated' });
+      }
+    },
+    broadcastChannelWiped(channel) {
+      for (const client of clients) {
+        sendToClient(client, { type: 'chat:channel_wiped', channel });
       }
     },
     broadcastChallengesUpdated() {

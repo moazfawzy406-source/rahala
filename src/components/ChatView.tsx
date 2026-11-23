@@ -4,9 +4,14 @@ import {
   ROLE_LABELS,
   type AuthUser,
   type ChannelId,
+  type ChatFontSize,
   type ChatMessage,
+  type ChatWallpaperId,
+  type DisappearingHours,
+  type GroupChatSettings,
   type HistoryRequestRecord,
   type MessageReceiptDetail,
+  type UserChatSettings,
 } from '../../shared/types';
 import { useWebSocket, type WsServerEvent } from '../hooks/useWebSocket';
 import { ApiError, apiRequest, fetchAssetAccessUrl, uploadAssetBinary } from '../lib/api';
@@ -42,6 +47,80 @@ const EMOJI_CATEGORIES: Array<{ id: string; label: string; items: string[] }> = 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🤲', '📚', '🔥'];
 const STICKER_EMOJIS = ['📚', '🎓', '👍', '❤️', '🤲', '✨', '📝', '☕', '🌟', '👏', '💡', '🕌'];
 const MAX_VOICE_SECONDS = 15 * 60; // 15 minutes
+const MAX_CHAT_UPLOAD_BYTES = 25_000_000;
+
+const DEFAULT_USER_SETTINGS: UserChatSettings = {
+  wallpaper: 'default',
+  fontSize: 'medium',
+  enterToSend: true,
+  readReceiptsEnabled: true,
+  chatSoundsEnabled: true,
+};
+
+const DEFAULT_GROUP_SETTINGS: GroupChatSettings = {
+  groupName: 'مجتمع رَحّالَة',
+  groupDescription: 'ملتقى طلاب الدفعة لتبادل الملخصات والأسئلة والمناقشات العلمية.',
+  groupRules: 'الاحترام المتبادل، والالتزام بموضوع القناة، وعدم نشر روابط غير موثوقة.',
+  chatLocked: false,
+  editInfoPolicy: 'mods',
+  allowMedia: true,
+  allowReactions: true,
+  disappearingHours: 0,
+  pinnedMessages: {
+    announcements: null,
+    questions: null,
+    general: null,
+  },
+};
+
+const WALLPAPER_OPTIONS: Array<{
+  id: ChatWallpaperId;
+  label: string;
+  previewClass: string;
+}> = [
+  { id: 'default', label: 'افتراضي', previewClass: 'bg-[var(--bg-surface)]' },
+  { id: 'islamic-geo', label: 'زخرفة هندسية', previewClass: 'bg-[var(--bg-card)] chat-wallpaper-islamic-geo' },
+  { id: 'midnight', label: 'سكون الليل', previewClass: 'bg-[#101C2C] chat-wallpaper-midnight' },
+  { id: 'warm-parchment', label: 'ورق دافئ', previewClass: 'bg-[#2C2419] chat-wallpaper-warm-parchment' },
+  { id: 'emerald', label: 'زمردي هادئ', previewClass: 'bg-[#102822] chat-wallpaper-emerald' },
+];
+
+const FONT_SIZE_OPTIONS: Array<{ id: ChatFontSize; label: string; textClass: string }> = [
+  { id: 'small', label: 'صغير', textClass: 'text-xs leading-relaxed' },
+  { id: 'medium', label: 'متوسط', textClass: 'text-sm leading-relaxed' },
+  { id: 'large', label: 'كبير', textClass: 'text-base leading-relaxed' },
+];
+
+const DISAPPEARING_OPTIONS: Array<{ hours: DisappearingHours; label: string }> = [
+  { hours: 0, label: 'معطّلة' },
+  { hours: 24, label: '٢٤ ساعة' },
+  { hours: 168, label: '٧ أيام' },
+  { hours: 720, label: '٣٠ يومًا' },
+];
+
+function playChatPing() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(660, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.05, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+    window.setTimeout(() => {
+      void ctx.close().catch(() => {});
+    }, 250);
+  } catch {
+    // ignore audio restrictions
+  }
+}
 
 function VoiceMessagePlayer({ assetId }: { assetId: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -292,12 +371,49 @@ export function ChatView({
   const [infoLoading, setInfoLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
+  // WhatsApp-style personal & group settings
+  const [userSettings, setUserSettings] = useState<UserChatSettings>(DEFAULT_USER_SETTINGS);
+  const [groupSettings, setGroupSettings] = useState<GroupChatSettings>(DEFAULT_GROUP_SETTINGS);
+  const [isMutedInChat, setIsMutedInChat] = useState(false);
+  const [uploadingFileName, setUploadingFileName] = useState<string | null>(null);
+  const [dragOverFiles, setDragOverFiles] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
+
+  const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
+  const [chatSettingsTab, setChatSettingsTab] = useState<'prefs' | 'starred'>('prefs');
+  const [starredMessages, setStarredMessages] = useState<ChatMessage[]>([]);
+  const [starredLoading, setStarredLoading] = useState(false);
+  const [clearChannelConfirmOpen, setClearChannelConfirmOpen] = useState(false);
+
+  const [groupSettingsOpen, setGroupSettingsOpen] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState(DEFAULT_GROUP_SETTINGS.groupName);
+  const [groupDescDraft, setGroupDescDraft] = useState(DEFAULT_GROUP_SETTINGS.groupDescription);
+  const [groupRulesDraft, setGroupRulesDraft] = useState(DEFAULT_GROUP_SETTINGS.groupRules);
+  const [savingGroupSettings, setSavingGroupSettings] = useState(false);
+
+  const [wipeMode, setWipeMode] = useState<'channel' | 'all' | null>(null);
+  const [wipeConfirmText, setWipeConfirmText] = useState('');
+  const [wipeBusy, setWipeBusy] = useState(false);
+
   const isAdminOrOwner = user.role === 'admin' || user.role === 'owner';
+  const canEditGroupInfo =
+    user.role === 'owner' || (user.role === 'admin' && groupSettings.editInfoPolicy === 'mods');
+
   const canSendInChannel = useMemo(() => {
     if (channel === 'announcements') return isAdminOrOwner;
     if (chatLocked) return isAdminOrOwner;
+    if (isMutedInChat && !isAdminOrOwner) return false;
     return true;
-  }, [channel, chatLocked, isAdminOrOwner]);
+  }, [channel, chatLocked, isAdminOrOwner, isMutedInChat]);
+
+  const messageTextSizeClass = useMemo(() => {
+    return (
+      FONT_SIZE_OPTIONS.find((f) => f.id === userSettings.fontSize)?.textClass ??
+      'text-sm leading-relaxed'
+    );
+  }, [userSettings.fontSize]);
+
+  const currentPinned = groupSettings.pinnedMessages[channel];
 
   const scrollToBottom = useCallback((smooth = false) => {
     const el = listRef.current;
@@ -378,6 +494,38 @@ export function ChatView({
     }
   }, [isAdminOrOwner, user.historyGranted]);
 
+  const loadChatSettings = useCallback(async () => {
+    try {
+      const res = await apiRequest<{
+        userSettings: UserChatSettings;
+        groupSettings: GroupChatSettings;
+        isMutedInChat: boolean;
+      }>('/api/chat/settings', { background: true });
+      setUserSettings(res.userSettings);
+      setGroupSettings(res.groupSettings);
+      setChatLocked(res.groupSettings.chatLocked);
+      setIsMutedInChat(res.isMutedInChat);
+    } catch {
+      // keep existing settings
+    }
+  }, []);
+
+  const loadStarredMessages = useCallback(async () => {
+    setStarredLoading(true);
+    try {
+      const res = await apiRequest<{ messages: ChatMessage[] }>('/api/chat/starred');
+      setStarredMessages(res.messages);
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تحميل الرسائل المميزة بنجمة', true);
+    } finally {
+      setStarredLoading(false);
+    }
+  }, [onToast]);
+
+  useEffect(() => {
+    void loadChatSettings();
+  }, [loadChatSettings]);
+
   useEffect(() => {
     void loadChannel(channel, true);
     void loadHistoryStatus();
@@ -424,10 +572,27 @@ export function ChatView({
       if (ev.type === 'user:updated') {
         onUserRefresh();
         void loadHistoryStatus();
+        void loadChatSettings();
         return;
       }
       if (ev.type === 'chat:lock_changed') {
         setChatLocked(Boolean(ev.locked));
+        void loadChatSettings();
+        return;
+      }
+      if (ev.type === 'chat:group_settings_updated') {
+        void loadChatSettings();
+        return;
+      }
+      if (ev.type === 'chat:channel_wiped') {
+        if (ev.channel === 'all' || ev.channel === channel) {
+          setMessages([]);
+          setSearchResults(null);
+          setHasMore(false);
+          onToast('تم تنفيذ المحو الكامل لرسائل المحادثة بواسطة المالك');
+        }
+        onUnreadRefresh();
+        void loadChatSettings();
         return;
       }
       if (ev.type === 'typing:updated' && ev.channel === channel) {
@@ -447,6 +612,9 @@ export function ChatView({
         ev.channel === channel
       ) {
         if (ev.type === 'message:created') {
+          if (userSettings.chatSoundsEnabled && document.visibilityState === 'visible') {
+            playChatPing();
+          }
           void syncIncremental();
         } else {
           // Re-fetch visible window to reflect edits, tombstones, or reactions accurately
@@ -488,12 +656,15 @@ export function ChatView({
     },
     [
       channel,
+      loadChatSettings,
       loadHistoryStatus,
       messages.length,
       onForceLogout,
+      onToast,
       onUnreadRefresh,
       onUserRefresh,
       syncIncremental,
+      userSettings.chatSoundsEnabled,
     ]
   );
 
@@ -616,6 +787,7 @@ export function ChatView({
         if (prev.some((m) => m.id === res.message.id)) return prev;
         return [...prev, res.message];
       });
+      if (userSettings.chatSoundsEnabled) playChatPing();
       window.setTimeout(() => scrollToBottom(true), 20);
     } catch (err) {
       // Preserve draft text on recoverable error!
@@ -643,6 +815,7 @@ export function ChatView({
       setMessages((prev) =>
         prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]
       );
+      if (userSettings.chatSoundsEnabled) playChatPing();
       window.setTimeout(() => scrollToBottom(true), 20);
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر الإرسال', true);
@@ -653,19 +826,31 @@ export function ChatView({
 
   const handleUploadAndSendFile = async (file: File, isImageMode: boolean) => {
     if (!canSendInChannel || sending) return;
+    if (!groupSettings.allowMedia && !isAdminOrOwner) {
+      onToast('إرسال الملفات والوسائط معطل حاليًا في إعدادات الجروب', true);
+      return;
+    }
+
+    const lowerName = file.name.toLowerCase();
+    const isPdfFile = file.type === 'application/pdf' || lowerName.endsWith('.pdf');
+    const shouldResizeAsImage =
+      !isPdfFile &&
+      (file.type.startsWith('image/') ||
+        (isImageMode && /\.(png|jpe?g|webp|gif)$/i.test(lowerName)));
+
     setSending(true);
+    setUploadingFileName(file.name);
     try {
       let uploadBlob: Blob = file;
       let uploadName = file.name;
-      if (isImageMode || file.type.startsWith('image/')) {
+      if (shouldResizeAsImage) {
         const resized = await resizeImageForUpload(file, 1600, 0.85);
         uploadBlob = resized.blob;
         uploadName = resized.filename;
       }
 
-      if (uploadBlob.size > 15_000_000) {
-        onToast('حجم الملف يتجاوز الحد الأقصى المسموح به (١٥ ميجابايت)', true);
-        setSending(false);
+      if (uploadBlob.size > MAX_CHAT_UPLOAD_BYTES) {
+        onToast('حجم الملف يتجاوز الحد الأقصى المسموح به (٢٥ ميجابايت)', true);
         return;
       }
 
@@ -685,10 +870,12 @@ export function ChatView({
       setMessages((prev) =>
         prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]
       );
+      if (userSettings.chatSoundsEnabled) playChatPing();
       window.setTimeout(() => scrollToBottom(true), 20);
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر رفع أو إرسال الملف', true);
     } finally {
+      setUploadingFileName(null);
       setSending(false);
     }
   };
@@ -813,6 +1000,10 @@ export function ChatView({
 
   const handleReact = async (msg: ChatMessage, emoji: string) => {
     setActionMsg(null);
+    if (!groupSettings.allowReactions && !isAdminOrOwner) {
+      onToast('التفاعلات معطلة حاليًا في إعدادات الجروب', true);
+      return;
+    }
     try {
       await apiRequest(`/api/chat/messages/${msg.id}/react`, {
         method: 'POST',
@@ -826,6 +1017,64 @@ export function ChatView({
       setMessages(res.messages);
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر تسجيل التفاعل', true);
+    }
+  };
+
+  const handleToggleStar = async (msg: ChatMessage) => {
+    setActionMsg(null);
+    const nextStarred = !msg.starredByMe;
+    try {
+      await apiRequest(`/api/chat/messages/${msg.id}/star`, {
+        method: nextStarred ? 'POST' : 'DELETE',
+      });
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, starredByMe: nextStarred } : m))
+      );
+      onToast(nextStarred ? 'تم تمييز الرسالة بنجمة' : 'تمت إزالة النجمة عن الرسالة');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تحديث النجمة', true);
+    }
+  };
+
+  const handleTogglePin = async (msg: ChatMessage) => {
+    setActionMsg(null);
+    const isCurrentlyPinned = currentPinned?.id === msg.id;
+    try {
+      const res = isCurrentlyPinned
+        ? await apiRequest<{ groupSettings: GroupChatSettings }>(`/api/chat/pins/${channel}`, {
+            method: 'DELETE',
+          })
+        : await apiRequest<{ groupSettings: GroupChatSettings }>(`/api/chat/messages/${msg.id}/pin`, {
+            method: 'POST',
+          });
+      setGroupSettings(res.groupSettings);
+      onToast(isCurrentlyPinned ? 'تم إلغاء تثبيت الرسالة' : 'تم تثبيت الرسالة في أعلى القناة');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تحديث التثبيت', true);
+    }
+  };
+
+  const handleUnpinChannel = async () => {
+    try {
+      const res = await apiRequest<{ groupSettings: GroupChatSettings }>(`/api/chat/pins/${channel}`, {
+        method: 'DELETE',
+      });
+      setGroupSettings(res.groupSettings);
+      onToast('تم إلغاء تثبيت الرسالة');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر إلغاء التثبيت', true);
+    }
+  };
+
+  const jumpToPinnedMessage = () => {
+    if (!currentPinned) return;
+    const el = document.getElementById(`chat-msg-${currentPinned.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMessageId(currentPinned.id);
+      window.setTimeout(() => setHighlightedMessageId(null), 1800);
+    } else {
+      onToast(`الرسالة المثبتة (${currentPinned.senderName}): ${currentPinned.excerpt}`);
     }
   };
 
@@ -854,12 +1103,14 @@ export function ChatView({
                 audioAttachment: null,
                 fileAttachment: null,
                 reactions: [],
+                starredByMe: false,
                 deletedAt: Date.now(),
               }
             : m
         )
       );
       setDeleteAllTarget(null);
+      void loadChatSettings();
       onToast('تم حذف الرسالة عند الجميع');
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر حذف الرسالة', true);
@@ -875,7 +1126,8 @@ export function ChatView({
       await apiRequest(`/api/chat/messages/${purgeTarget.id}/purge`, { method: 'DELETE' });
       setMessages((prev) => prev.filter((m) => m.id !== purgeTarget.id));
       setPurgeTarget(null);
-      onToast('تمت إزالة الرسالة نهائيًا من المحادثة');
+      void loadChatSettings();
+      onToast('تم المحو الكامل للرسالة من المحادثة وقاعدة البيانات');
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر إزالة الرسالة', true);
     } finally {
@@ -908,9 +1160,121 @@ export function ChatView({
         body: { locked: !chatLocked },
       });
       setChatLocked(res.chatLocked);
+      setGroupSettings((prev) => ({ ...prev, chatLocked: res.chatLocked }));
       onToast(res.chatLocked ? 'تم قفل المحادثة على الأعضاء' : 'تم فتح المحادثة للجميع');
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر تغيير حالة المحادثة', true);
+    }
+  };
+
+  const handleUpdateUserSettings = async (patch: Partial<UserChatSettings>) => {
+    const optimistic = { ...userSettings, ...patch };
+    setUserSettings(optimistic);
+    try {
+      const res = await apiRequest<{ userSettings: UserChatSettings }>('/api/chat/settings/me', {
+        method: 'PUT',
+        body: patch,
+      });
+      setUserSettings(res.userSettings);
+      if (patch.readReceiptsEnabled !== undefined) {
+        void loadChannel(channel, false);
+      }
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر حفظ إعدادات المحادثة', true);
+      void loadChatSettings();
+    }
+  };
+
+  const handleUpdateGroupSettings = async (
+    patch: Partial<{
+      groupName: string;
+      groupDescription: string;
+      groupRules: string;
+      chatLocked: boolean;
+      editInfoPolicy: 'mods' | 'owner';
+      allowMedia: boolean;
+      allowReactions: boolean;
+      disappearingHours: DisappearingHours;
+    }>
+  ) => {
+    setSavingGroupSettings(true);
+    try {
+      const res = await apiRequest<{ groupSettings: GroupChatSettings }>('/api/chat/settings/group', {
+        method: 'PATCH',
+        body: patch,
+      });
+      setGroupSettings(res.groupSettings);
+      setChatLocked(res.groupSettings.chatLocked);
+      if (patch.disappearingHours !== undefined) {
+        void loadChannel(channel, false);
+      }
+      onToast('تم تحديث إعدادات الجروب');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تحديث إعدادات الجروب', true);
+    } finally {
+      setSavingGroupSettings(false);
+    }
+  };
+
+  const handleClearChannelForMe = async () => {
+    setActionBusy(true);
+    try {
+      await apiRequest(`/api/chat/channels/${channel}/clear-for-me`, { method: 'POST' });
+      setMessages([]);
+      setSearchResults(null);
+      setClearChannelConfirmOpen(false);
+      setChatSettingsOpen(false);
+      onUnreadRefresh();
+      onToast('تم مسح رسائل هذه القناة من شاشتك فقط');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر مسح المحادثة', true);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleExportChannelTxt = async () => {
+    try {
+      const res = await apiRequest<{ filename: string; text: string }>(
+        `/api/chat/channels/${channel}/export`
+      );
+      const blob = new Blob(['\uFEFF' + res.text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      onToast('تم تصدير سجل القناة بصيغة نصية');
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تصدير المحادثة', true);
+    }
+  };
+
+  const handleExecuteCompleteWipe = async () => {
+    if (!wipeMode || wipeConfirmText.trim() !== 'محو') return;
+    setWipeBusy(true);
+    try {
+      if (wipeMode === 'channel') {
+        await apiRequest(`/api/chat/channels/${channel}/wipe`, { method: 'POST' });
+        onToast('تم المحو الكامل لرسائل القناة الحالية من القاعدة لدى الجميع');
+      } else {
+        await apiRequest('/api/chat/wipe-all', { method: 'POST' });
+        onToast('تم المحو الكامل لجميع قنوات المحادثة من القاعدة لدى الجميع');
+      }
+      setMessages([]);
+      setSearchResults(null);
+      setWipeMode(null);
+      setWipeConfirmText('');
+      setGroupSettingsOpen(false);
+      onUnreadRefresh();
+      void loadChatSettings();
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تنفيذ المحو الكامل', true);
+    } finally {
+      setWipeBusy(false);
     }
   };
 
@@ -973,6 +1337,72 @@ export function ChatView({
     <div className="flex flex-col h-[calc(100dvh-136px)] md:h-[calc(100dvh-96px)] max-h-[calc(100dvh-136px)] md:max-h-[calc(100dvh-96px)] rahhala-card overflow-hidden">
       {/* Chat Header & Channel Tabs */}
       <div className="shrink-0 border-b border-[var(--divider)] bg-[var(--bg-card)] px-3 sm:px-4 py-2.5 space-y-2.5">
+        {/* WhatsApp-style Group Header Strip */}
+        <div className="flex items-center justify-between gap-2 pb-2 border-b border-[var(--divider)]">
+          <button
+            type="button"
+            onClick={() => {
+              setGroupNameDraft(groupSettings.groupName);
+              setGroupDescDraft(groupSettings.groupDescription);
+              setGroupRulesDraft(groupSettings.groupRules);
+              setGroupSettingsOpen(true);
+            }}
+            className="flex items-center gap-2.5 min-w-0 text-right group"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 flex items-center justify-center shrink-0">
+              <Icons.Users className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="font-extrabold text-sm text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
+                {groupSettings.groupName}
+              </div>
+              <div className="text-[11px] text-[var(--text-secondary)] truncate flex items-center gap-1.5">
+                <span>اضغط لمعلومات وإعدادات الجروب</span>
+                {groupSettings.disappearingHours > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-[var(--accent)] font-semibold">
+                      اختفاء تلقائي ({DISAPPEARING_OPTIONS.find((d) => d.hours === groupSettings.disappearingHours)?.label})
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </button>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setChatSettingsTab('prefs');
+                setChatSettingsOpen(true);
+              }}
+              aria-label="إعدادات المحادثة"
+              title="إعدادات المحادثة"
+              className="min-h-[40px] px-2.5 sm:px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] text-xs font-bold flex items-center gap-1.5 hover:border-[var(--accent)]"
+            >
+              <Icons.Sliders className="w-4 h-4 text-[var(--accent)]" />
+              <span className="hidden md:inline">إعدادات المحادثة</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setGroupNameDraft(groupSettings.groupName);
+                setGroupDescDraft(groupSettings.groupDescription);
+                setGroupRulesDraft(groupSettings.groupRules);
+                setGroupSettingsOpen(true);
+              }}
+              aria-label="إعدادات الجروب"
+              title="إعدادات الجروب"
+              className="min-h-[40px] px-2.5 sm:px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-[var(--text-primary)] text-xs font-bold flex items-center gap-1.5 hover:border-[var(--accent)]"
+            >
+              <Icons.Settings className="w-4 h-4 text-[var(--accent)]" />
+              <span className="hidden md:inline">إعدادات الجروب</span>
+            </button>
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-surface)]">
             {CHANNELS.map((ch) => {
@@ -1050,6 +1480,37 @@ export function ChatView({
           </div>
         </div>
 
+        {/* Pinned Message Banner (WhatsApp-style) */}
+        {currentPinned && (
+          <div className="px-3 py-2 rounded-xl bg-[var(--bg-surface)] border border-[var(--accent)]/35 flex items-center justify-between gap-2 text-xs">
+            <button
+              type="button"
+              onClick={jumpToPinnedMessage}
+              className="flex items-center gap-2 min-w-0 flex-1 text-right"
+            >
+              <Icons.Pin className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+              <div className="min-w-0">
+                <span className="font-bold text-[var(--accent)] ml-1.5">
+                  رسالة مثبتة ({currentPinned.senderName}):
+                </span>
+                <span className="text-[var(--text-primary)] truncate">
+                  {currentPinned.excerpt}
+                </span>
+              </div>
+            </button>
+            {isAdminOrOwner && (
+              <button
+                type="button"
+                onClick={handleUnpinChannel}
+                aria-label="إلغاء تثبيت الرسالة"
+                className="min-h-[32px] min-w-[32px] rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--error)] shrink-0"
+              >
+                <Icons.PinOff className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
         {searchOpen && (
           <form onSubmit={handleSearchSubmit} className="flex gap-2">
             <input
@@ -1105,12 +1566,32 @@ export function ChatView({
         )}
       </div>
 
-      {/* Messages List */}
+      {/* Messages List (with Chat Wallpaper + Drag & Drop File Upload) */}
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 py-4 space-y-3 relative"
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes('Files') && canSendInChannel) {
+            e.preventDefault();
+            setDragOverFiles(true);
+          }
+        }}
+        onDragLeave={() => setDragOverFiles(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOverFiles(false);
+          const dropped = e.dataTransfer?.files?.[0];
+          if (dropped && canSendInChannel) {
+            void handleUploadAndSendFile(dropped, false);
+          }
+        }}
+        className={`flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 py-4 space-y-3 relative chat-wallpaper-${userSettings.wallpaper}`}
       >
+        {dragOverFiles && (
+          <div className="sticky top-2 z-20 p-4 rounded-2xl bg-[var(--glass-elevated)] border-2 border-dashed border-[var(--accent)] text-center text-sm font-bold text-[var(--accent)]">
+            أفلت ملف PDF أو الصورة أو المستند هنا لإرساله في القناة
+          </div>
+        )}
         {searchResults !== null ? (
           <div className="space-y-3">
             <div className="text-xs font-bold text-[var(--accent)]">
@@ -1199,9 +1680,12 @@ export function ChatView({
                     )}
 
                     <div
-                      className={`max-w-[85%] sm:max-w-[72%] rounded-2xl px-3.5 py-2.5 border border-[var(--divider)] ${
-                        isOwn ? 'bg-[var(--bubble-own)]' : 'bg-[var(--bubble-other)]'
-                      }`}
+                      id={`chat-msg-${msg.id}`}
+                      className={`max-w-[85%] sm:max-w-[72%] rounded-2xl px-3.5 py-2.5 border transition-colors ${
+                        highlightedMessageId === msg.id
+                          ? 'border-[var(--accent)] ring-2 ring-[var(--accent-soft)]'
+                          : 'border-[var(--divider)]'
+                      } ${isOwn ? 'bg-[var(--bubble-own)]' : 'bg-[var(--bubble-other)]'}`}
                     >
                       <div className="flex items-center justify-between gap-3 mb-1">
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -1244,7 +1728,7 @@ export function ChatView({
                       ) : (
                         <>
                           {msg.body && (
-                            <p className="text-sm text-[var(--text-primary)] whitespace-pre-wrap break-words leading-relaxed">
+                            <p className={`${messageTextSizeClass} text-[var(--text-primary)] whitespace-pre-wrap break-words`}>
                               {renderLinkifiedText(msg.body)}
                             </p>
                           )}
@@ -1290,6 +1774,7 @@ export function ChatView({
                             <button
                               key={r.emoji}
                               type="button"
+                              disabled={!groupSettings.allowReactions && !isAdminOrOwner}
                               onClick={() => handleReact(msg, r.emoji)}
                               className={`min-h-[28px] px-2 py-0.5 rounded-lg text-xs border flex items-center gap-1 tabular-nums ${
                                 r.reactedByMe
@@ -1305,6 +1790,11 @@ export function ChatView({
                       )}
 
                       <div className="flex items-center justify-end gap-1.5 mt-1.5 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                        {msg.starredByMe && !isDeleted && (
+                          <span aria-label="رسالة مميزة بنجمة" title="مميزة بنجمة" className="text-[var(--accent)] inline-flex">
+                            <Icons.Star className="w-3 h-3 fill-current" />
+                          </span>
+                        )}
                         {msg.editedAt && <span>معدّلة ·</span>}
                         <span>{formatClockTime(msg.createdAt)}</span>
                         {renderReceiptIcon(msg.receiptStatus)}
@@ -1450,13 +1940,26 @@ export function ChatView({
       )}
 
       {/* Composer */}
-      <div className="shrink-0 border-t border-[var(--divider)] bg-[var(--bg-card)] p-2.5 sm:p-3">
+      <div className="shrink-0 border-t border-[var(--divider)] bg-[var(--bg-card)] p-2.5 sm:p-3 space-y-2">
+        {uploadingFileName && (
+          <div className="px-3 py-1.5 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-xs font-semibold text-[var(--accent)] flex items-center justify-between gap-2">
+            <span className="truncate">جاري رفع وإرسال: {uploadingFileName}</span>
+            <span className="shrink-0 tabular-nums">يرجى الانتظار…</span>
+          </div>
+        )}
+
         {!canSendInChannel && !editingMsg ? (
           <div className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[var(--bg-surface)] text-xs font-semibold text-[var(--text-secondary)] text-center flex items-center justify-center gap-2">
-            <Icons.Lock className="w-4 h-4 text-[var(--accent)] shrink-0" />
+            {isMutedInChat && !isAdminOrOwner ? (
+              <Icons.VolumeX className="w-4 h-4 text-[var(--error)] shrink-0" />
+            ) : (
+              <Icons.Lock className="w-4 h-4 text-[var(--accent)] shrink-0" />
+            )}
             <span>
               {channel === 'announcements'
                 ? 'قناة الإعلانات للقراءة فقط — النشر متاح للمشرفين والمالك.'
+                : isMutedInChat && !isAdminOrOwner
+                ? 'تم كتمك عن الإرسال في المحادثة بواسطة الإدارة.'
                 : 'المحادثة مقفولة حاليًا بواسطة الإدارة.'}
             </span>
           </div>
@@ -1505,7 +2008,7 @@ export function ChatView({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,image/*,audio/*"
+              accept="application/pdf,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,image/*,audio/*"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -1523,26 +2026,29 @@ export function ChatView({
               <Icons.Smile className="w-5 h-5" />
             </button>
 
-            {!draft.trim() && !editingMsg && (
+            {!editingMsg && (groupSettings.allowMedia || isAdminOrOwner) && (
               <>
                 <button
                   type="button"
                   disabled={sending}
                   onClick={() => fileInputRef.current?.click()}
-                  aria-label="إرفاق ملف"
-                  className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center shrink-0"
+                  aria-label="إرفاق ملف أو PDF"
+                  title="إرفاق ملف (PDF / Word / PowerPoint / صورة)"
+                  className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center shrink-0 disabled:opacity-50"
                 >
                   <Icons.Paperclip className="w-5 h-5" />
                 </button>
-                <button
-                  type="button"
-                  disabled={sending}
-                  onClick={() => imageInputRef.current?.click()}
-                  aria-label="إرسال صورة"
-                  className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center shrink-0"
-                >
-                  <Icons.Image className="w-5 h-5" />
-                </button>
+                {!draft.trim() && (
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => imageInputRef.current?.click()}
+                    aria-label="إرسال صورة"
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center shrink-0 disabled:opacity-50"
+                  >
+                    <Icons.Image className="w-5 h-5" />
+                  </button>
+                )}
               </>
             )}
 
@@ -1560,6 +2066,7 @@ export function ChatView({
               onKeyDown={(e) => {
                 const isMobileWidth = window.innerWidth < 768;
                 if (
+                  userSettings.enterToSend &&
                   e.key === 'Enter' &&
                   !e.shiftKey &&
                   !e.nativeEvent.isComposing &&
@@ -1587,7 +2094,7 @@ export function ChatView({
             ) : (
               <button
                 type="button"
-                disabled={sending}
+                disabled={sending || (!groupSettings.allowMedia && !isAdminOrOwner)}
                 onClick={startVoiceRecording}
                 aria-label="تسجيل رسالة صوتية"
                 className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] flex items-center justify-center shrink-0 disabled:opacity-50"
@@ -1610,18 +2117,20 @@ export function ChatView({
           <div className="space-y-3">
             {actionMsg.deletedAt === null && (
               <>
-                <div className="flex items-center justify-between gap-1 p-2 rounded-xl bg-[var(--bg-surface)]">
-                  {QUICK_REACTIONS.map((em) => (
-                    <button
-                      key={em}
-                      type="button"
-                      onClick={() => handleReact(actionMsg, em)}
-                      className="min-h-[40px] min-w-[40px] rounded-lg hover:bg-black/15 text-xl flex items-center justify-center"
-                    >
-                      {em}
-                    </button>
-                  ))}
-                </div>
+                {(groupSettings.allowReactions || isAdminOrOwner) && (
+                  <div className="flex items-center justify-between gap-1 p-2 rounded-xl bg-[var(--bg-surface)]">
+                    {QUICK_REACTIONS.map((em) => (
+                      <button
+                        key={em}
+                        type="button"
+                        onClick={() => handleReact(actionMsg, em)}
+                        className="min-h-[40px] min-w-[40px] rounded-lg hover:bg-black/15 text-xl flex items-center justify-center"
+                      >
+                        {em}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {canSendInChannel && (
                   <button
@@ -1636,6 +2145,32 @@ export function ChatView({
                   >
                     <Icons.Reply className="w-4 h-4 text-[var(--accent)]" />
                     <span>رد على الرسالة</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => handleToggleStar(actionMsg)}
+                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[var(--bg-surface)] text-sm font-semibold flex items-center gap-2.5"
+                >
+                  <Icons.Star
+                    className={`w-4 h-4 text-[var(--accent)] ${actionMsg.starredByMe ? 'fill-current' : ''}`}
+                  />
+                  <span>{actionMsg.starredByMe ? 'إزالة النجمة' : 'تمييز بنجمة'}</span>
+                </button>
+
+                {isAdminOrOwner && (
+                  <button
+                    type="button"
+                    onClick={() => handleTogglePin(actionMsg)}
+                    className="w-full min-h-[44px] px-3.5 rounded-xl bg-[var(--bg-surface)] text-sm font-semibold flex items-center gap-2.5"
+                  >
+                    <Icons.Pin className="w-4 h-4 text-[var(--accent)]" />
+                    <span>
+                      {currentPinned?.id === actionMsg.id
+                        ? 'إلغاء تثبيت الرسالة في القناة'
+                        : 'تثبيت الرسالة في أعلى القناة'}
+                    </span>
                   </button>
                 )}
 
@@ -1717,7 +2252,7 @@ export function ChatView({
                 className="w-full min-h-[44px] px-3.5 rounded-xl bg-[var(--error)] text-white text-sm font-bold flex items-center gap-2.5"
               >
                 <Icons.Trash className="w-4 h-4" />
-                <span>حذف نهائي (للمالك فقط)</span>
+                <span>محو كامل من القاعدة (للمالك فقط)</span>
               </button>
             )}
           </div>
@@ -1739,12 +2274,549 @@ export function ChatView({
         open={Boolean(purgeTarget)}
         onClose={() => setPurgeTarget(null)}
         onConfirm={handleOwnerPurge}
-        title="حذف نهائي من المحادثة"
-        message="سيتم إزالة هذه الرسالة من سجل المحادثة الظاهر دون ترك أثر (تم الحذف). هذا الإجراء يزيلها من المحادثة الحالية فقط ولا يعد بحذف النسخ الاحتياطية الخارجية إن وُجدت."
-        confirmLabel="حذف نهائي"
+        title="محو كامل للرسالة"
+        message="سيتم مسح هذه الرسالة ومرفقاتها من قاعدة البيانات بالكامل دون ترك أثر (تم حذف هذه الرسالة) لدى جميع الأعضاء."
+        confirmLabel="تأكيد المحو الكامل"
         destructive
         busy={actionBusy}
       />
+
+      {/* WhatsApp-Style Personal Chat Settings Modal */}
+      <ModalShell
+        open={chatSettingsOpen}
+        onClose={() => setChatSettingsOpen(false)}
+        title="إعدادات المحادثة"
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-4">
+          <div className="flex gap-1 p-1 rounded-xl bg-[var(--bg-surface)]">
+            <button
+              type="button"
+              onClick={() => setChatSettingsTab('prefs')}
+              className={`flex-1 min-h-[40px] rounded-lg text-xs sm:text-sm font-bold ${
+                chatSettingsTab === 'prefs'
+                  ? 'bg-[var(--bg-card)] text-[var(--accent)] shadow-xs'
+                  : 'text-[var(--text-secondary)]'
+              }`}
+            >
+              المظهر والتفضيلات
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setChatSettingsTab('starred');
+                void loadStarredMessages();
+              }}
+              className={`flex-1 min-h-[40px] rounded-lg text-xs sm:text-sm font-bold ${
+                chatSettingsTab === 'starred'
+                  ? 'bg-[var(--bg-card)] text-[var(--accent)] shadow-xs'
+                  : 'text-[var(--text-secondary)]'
+              }`}
+            >
+              الرسائل المميزة بنجمة
+            </button>
+          </div>
+
+          {chatSettingsTab === 'prefs' ? (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-[var(--text-secondary)] flex items-center gap-1.5">
+                  <Icons.Sparkles className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <span>خلفية المحادثة</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {WALLPAPER_OPTIONS.map((wp) => {
+                    const active = userSettings.wallpaper === wp.id;
+                    return (
+                      <button
+                        key={wp.id}
+                        type="button"
+                        onClick={() => void handleUpdateUserSettings({ wallpaper: wp.id })}
+                        className={`p-2.5 rounded-xl border text-right transition-colors min-h-[58px] flex flex-col justify-between ${
+                          active
+                            ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]'
+                            : 'border-[var(--divider)] hover:border-[var(--accent)]/60'
+                        } ${wp.previewClass}`}
+                      >
+                        <span className="text-xs font-bold text-[var(--text-primary)]">{wp.label}</span>
+                        {active && (
+                          <span className="text-[11px] font-bold text-[var(--accent)]">مفعّلة</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-[var(--text-secondary)] flex items-center gap-1.5">
+                  <Icons.Type className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <span>حجم خط الرسائل</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {FONT_SIZE_OPTIONS.map((fs) => {
+                    const active = userSettings.fontSize === fs.id;
+                    return (
+                      <button
+                        key={fs.id}
+                        type="button"
+                        onClick={() => void handleUpdateUserSettings({ fontSize: fs.id })}
+                        className={`min-h-[44px] rounded-xl border text-xs font-bold ${
+                          active
+                            ? 'bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)]'
+                            : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {fs.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="divide-y divide-[var(--divider)] rounded-2xl bg-[var(--bg-surface)] border border-[var(--divider)] px-3.5">
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">مؤشرات قراءة الرسائل</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      إظهار واستقبال حالة القراءة (الصحّين الملونين)
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={userSettings.readReceiptsEnabled}
+                    onChange={(e) =>
+                      void handleUpdateUserSettings({ readReceiptsEnabled: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">أصوات المحادثة</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      نغمة خفيفة عند إرسال أو استقبال رسالة جديدة
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={userSettings.chatSoundsEnabled}
+                    onChange={(e) =>
+                      void handleUpdateUserSettings({ chatSoundsEnabled: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">مفتاح Enter للإرسال</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      إرسال الرسالة بضغطة Enter على سطح المكتب
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={userSettings.enterToSend}
+                    onChange={(e) =>
+                      void handleUpdateUserSettings({ enterToSend: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => void handleExportChannelTxt()}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-xs font-bold text-[var(--text-primary)] flex items-center justify-center gap-2 hover:border-[var(--accent)]"
+                >
+                  <Icons.Download className="w-4 h-4 text-[var(--accent)]" />
+                  <span>تصدير المحادثة (.txt)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setClearChannelConfirmOpen(true)}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-[var(--error-soft)] border border-[var(--error)]/30 text-xs font-bold text-[var(--error)] flex items-center justify-center gap-2"
+                >
+                  <Icons.EyeOff className="w-4 h-4" />
+                  <span>مسح الدردشة عندي</span>
+                </button>
+              </div>
+            </div>
+          ) : starredLoading ? (
+            <div className="py-8 text-center text-sm text-[var(--text-secondary)]">
+              جاري تحميل الرسائل المميزة…
+            </div>
+          ) : starredMessages.length === 0 ? (
+            <EmptyState
+              icon={<Icons.Star className="w-6 h-6" />}
+              title="لا توجد رسائل مميزة بنجمة"
+              subtitle="اضغط على خيارات أي رسالة واختر تمييز بنجمة للرجوع إليها بسرعة."
+            />
+          ) : (
+            <div className="space-y-2.5 max-h-[55vh] overflow-y-auto">
+              {starredMessages.map((sm) => (
+                <div
+                  key={sm.id}
+                  className="p-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-[var(--accent)]">{sm.senderName}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[var(--text-secondary)] tabular-nums">
+                        {formatDateTime(sm.createdAt)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await handleToggleStar(sm);
+                          setStarredMessages((prev) => prev.filter((x) => x.id !== sm.id));
+                        }}
+                        aria-label="إزالة النجمة"
+                        className="text-[var(--accent)] hover:text-[var(--error)]"
+                      >
+                        <Icons.Star className="w-4 h-4 fill-current" />
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-sm text-[var(--text-primary)] whitespace-pre-wrap break-words">
+                    {sm.body || (sm.audioAttachment ? 'رسالة صوتية' : sm.fileAttachment?.filename || 'مرفق')}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </ModalShell>
+
+      {/* WhatsApp-Style Group Info & Settings Modal */}
+      <ModalShell
+        open={groupSettingsOpen}
+        onClose={() => setGroupSettingsOpen(false)}
+        title="معلومات وإعدادات الجروب"
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-5">
+          {canEditGroupInfo ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleUpdateGroupSettings({
+                  groupName: groupNameDraft,
+                  groupDescription: groupDescDraft,
+                  groupRules: groupRulesDraft,
+                });
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1">
+                  اسم الجروب
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={2}
+                  maxLength={60}
+                  value={groupNameDraft}
+                  onChange={(e) => setGroupNameDraft(e.target.value)}
+                  className="rahhala-input w-full px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1">
+                  وصف الجروب
+                </label>
+                <textarea
+                  rows={2}
+                  maxLength={300}
+                  value={groupDescDraft}
+                  onChange={(e) => setGroupDescDraft(e.target.value)}
+                  className="rahhala-input w-full px-3 py-2 text-sm resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1">
+                  قوانين وضوابط المجموعة
+                </label>
+                <textarea
+                  rows={2}
+                  maxLength={400}
+                  value={groupRulesDraft}
+                  onChange={(e) => setGroupRulesDraft(e.target.value)}
+                  className="rahhala-input w-full px-3 py-2 text-sm resize-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingGroupSettings}
+                className="min-h-[44px] w-full rounded-xl bg-[var(--accent)] text-[var(--accent-fg)] text-sm font-bold disabled:opacity-60"
+              >
+                {savingGroupSettings ? 'جاري الحفظ…' : 'حفظ معلومات الجروب'}
+              </button>
+            </form>
+          ) : (
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)]">
+                <div className="text-xs text-[var(--text-secondary)]">اسم الجروب</div>
+                <div className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
+                  {groupSettings.groupName}
+                </div>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)]">
+                <div className="text-xs text-[var(--text-secondary)]">الوصف</div>
+                <p className="text-sm text-[var(--text-primary)] mt-1 whitespace-pre-wrap">
+                  {groupSettings.groupDescription}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)]">
+                <div className="text-xs text-[var(--text-secondary)]">قوانين المجموعة</div>
+                <p className="text-sm text-[var(--text-primary)] mt-1 whitespace-pre-wrap">
+                  {groupSettings.groupRules}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {isAdminOrOwner && (
+            <div className="space-y-3 pt-3 border-t border-[var(--divider)]">
+              <div className="text-xs font-bold text-[var(--accent)]">صلاحيات وإعدادات الإشراف</div>
+
+              <div className="divide-y divide-[var(--divider)] rounded-2xl bg-[var(--bg-surface)] border border-[var(--divider)] px-3.5">
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">قفل الإرسال للأعضاء</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      السماح للمشرفين والمالك فقط بالإرسال في القنوات
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={groupSettings.chatLocked}
+                    onChange={(e) =>
+                      void handleUpdateGroupSettings({ chatLocked: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">السماح بالملفات والوسائط</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      إرسال صور وملفات PDF ومستندات وصوتيات للأعضاء
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={groupSettings.allowMedia}
+                    onChange={(e) =>
+                      void handleUpdateGroupSettings({ allowMedia: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+
+                <label className="py-3 flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-bold text-[var(--text-primary)]">السماح بالتفاعلات</div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                      تفاعل الأعضاء بالرموز التعبيرية على الرسائل
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={groupSettings.allowReactions}
+                    onChange={(e) =>
+                      void handleUpdateGroupSettings({ allowReactions: e.target.checked })
+                    }
+                    className="w-5 h-5 accent-[var(--accent)]"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[var(--text-secondary)]">
+                  الرسائل ذاتية الاختفاء (تُخفي الرسائل الأقدم تلقائيًا)
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {DISAPPEARING_OPTIONS.map((opt) => {
+                    const active = groupSettings.disappearingHours === opt.hours;
+                    return (
+                      <button
+                        key={opt.hours}
+                        type="button"
+                        onClick={() =>
+                          void handleUpdateGroupSettings({ disappearingHours: opt.hours })
+                        }
+                        className={`min-h-[42px] rounded-xl border text-xs font-bold ${
+                          active
+                            ? 'bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)]'
+                            : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {user.role === 'owner' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-[var(--text-secondary)]">
+                    من يملك تعديل معلومات الجروب؟
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdateGroupSettings({ editInfoPolicy: 'mods' })}
+                      className={`min-h-[42px] rounded-xl border text-xs font-bold ${
+                        groupSettings.editInfoPolicy === 'mods'
+                          ? 'bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)]'
+                          : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)]'
+                      }`}
+                    >
+                      المشرفون والمالك
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdateGroupSettings({ editInfoPolicy: 'owner' })}
+                      className={`min-h-[42px] rounded-xl border text-xs font-bold ${
+                        groupSettings.editInfoPolicy === 'owner'
+                          ? 'bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)]'
+                          : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)]'
+                      }`}
+                    >
+                      المالك فقط
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupSettingsOpen(false);
+                  onOpenMembersAndMedia();
+                }}
+                className="min-h-[44px] w-full rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)] text-xs font-bold text-[var(--text-primary)] flex items-center justify-center gap-2 hover:border-[var(--accent)]"
+              >
+                <Icons.Users className="w-4 h-4 text-[var(--accent)]" />
+                <span>إدارة الأعضاء وكتم الإرسال</span>
+              </button>
+            </div>
+          )}
+
+          {user.role === 'owner' && (
+            <div className="space-y-2.5 pt-3 border-t border-[var(--error)]/30">
+              <div className="text-xs font-extrabold text-[var(--error)] flex items-center gap-1.5">
+                <Icons.AlertCircle className="w-4 h-4" />
+                <span>خاصية المحو الكامل (صلاحية المالك فقط)</span>
+              </div>
+              <p className="text-xs text-[var(--text-secondary)]">
+                يمسح جميع الرسائل والملفات المرفقة والتفاعلات من قاعدة البيانات نهائيًا عند الجميع.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWipeConfirmText('');
+                    setWipeMode('channel');
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl bg-[var(--error-soft)] border border-[var(--error)]/40 text-xs font-bold text-[var(--error)]"
+                >
+                  المحو الكامل لقناة {CHANNELS.find((c) => c.id === channel)?.label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWipeConfirmText('');
+                    setWipeMode('all');
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl bg-[var(--error)] text-white text-xs font-bold"
+                >
+                  المحو الكامل لجميع المحادثات
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </ModalShell>
+
+      <ConfirmDialog
+        open={clearChannelConfirmOpen}
+        onClose={() => setClearChannelConfirmOpen(false)}
+        onConfirm={handleClearChannelForMe}
+        title="مسح الدردشة عندي"
+        message="سيتم إخفاء جميع الرسائل الحالية في هذه القناة من شاشتك فقط، ولن تتأثر لدى باقي الأعضاء."
+        confirmLabel="مسح من شاشتي"
+        destructive
+        busy={actionBusy}
+      />
+
+      {/* Owner Double-Confirmation Complete Wipe Modal */}
+      <ModalShell
+        open={wipeMode !== null}
+        onClose={() => {
+          if (!wipeBusy) {
+            setWipeMode(null);
+            setWipeConfirmText('');
+          }
+        }}
+        title={wipeMode === 'all' ? 'تأكيد المحو الكامل لجميع المحادثات' : 'تأكيد المحو الكامل للقناة'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-primary)] leading-relaxed">
+            {wipeMode === 'all'
+              ? 'سيتم مسح جميع الرسائل والملفات والتسجيلات الصوتية في كل القنوات (إعلانات، أسئلة، عام) من قاعدة البيانات نهائيًا ولا يمكن التراجع.'
+              : `سيتم مسح جميع الرسائل والمرفقات في قناة "${CHANNELS.find((c) => c.id === channel)?.label}" من قاعدة البيانات نهائيًا ولا يمكن التراجع.`}
+          </p>
+
+          <div>
+            <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1.5">
+              اكتب كلمة <span className="text-[var(--error)]">محو</span> للتأكيد:
+            </label>
+            <input
+              type="text"
+              value={wipeConfirmText}
+              onChange={(e) => setWipeConfirmText(e.target.value)}
+              placeholder="محو"
+              className="rahhala-input w-full px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              disabled={wipeBusy}
+              onClick={() => {
+                setWipeMode(null);
+                setWipeConfirmText('');
+              }}
+              className="min-h-[44px] px-4 rounded-xl bg-[var(--bg-surface)] text-xs font-bold"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              disabled={wipeBusy || wipeConfirmText.trim() !== 'محو'}
+              onClick={handleExecuteCompleteWipe}
+              className="min-h-[44px] px-4 rounded-xl bg-[var(--error)] text-white text-xs font-bold disabled:opacity-45"
+            >
+              {wipeBusy ? 'جاري المحو…' : 'تنفيذ المحو الكامل'}
+            </button>
+          </div>
+        </div>
+      </ModalShell>
 
       {/* Message Delivery / Read Info Modal */}
       <ModalShell

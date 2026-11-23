@@ -107,13 +107,16 @@ export function detectAndValidateFile(
     }
   }
 
-  // PDF
-  if (options.allowOfficeAndPdf && asciiAt(buf, 0, '%PDF-')) {
-    const tail = buf.subarray(Math.max(0, buf.length - 2048)).toString('latin1');
-    if (tail.includes('%%EOF')) {
-      return { kind: 'pdf', mime: 'application/pdf', extension: '.pdf' };
+  // PDF (ISO 32000 allows %PDF- within first 1024 bytes, e.g. after UTF-8 BOM or whitespace)
+  if (options.allowOfficeAndPdf) {
+    const pdfHead = buf.subarray(0, Math.min(buf.length, 1024)).toString('latin1');
+    if (pdfHead.includes('%PDF-')) {
+      const tail = buf.subarray(Math.max(0, buf.length - 65536)).toString('latin1');
+      if (tail.includes('%%EOF')) {
+        return { kind: 'pdf', mime: 'application/pdf', extension: '.pdf' };
+      }
+      return null; // Reject truncated PDF
     }
-    return null; // Reject truncated PDF
   }
 
   // Office Open XML (DOCX, PPTX, XLSX)

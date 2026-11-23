@@ -44,9 +44,22 @@ export function MembersAndMediaModal({
   const [selectedMember, setSelectedMember] = useState<PublicMember | null>(null);
   const [adminEmailEdit, setAdminEmailEdit] = useState('');
   const [adminTempPass, setAdminTempPass] = useState('');
+  const [mutedIds, setMutedIds] = useState<Set<string>>(new Set());
   const [actionBusy, setActionBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<PublicMember | null>(null);
   const [confirmResetPass, setConfirmResetPass] = useState(false);
+
+  const loadMutedMembers = useCallback(async () => {
+    if (currentUser.role === 'member') return;
+    try {
+      const res = await apiRequest<{ mutedMemberIds?: string[] }>('/api/chat/settings', {
+        background: true,
+      });
+      setMutedIds(new Set(res.mutedMemberIds || []));
+    } catch {
+      // ignore
+    }
+  }, [currentUser.role]);
 
   const loadMembers = useCallback(async () => {
     setMembersLoading(true);
@@ -78,7 +91,8 @@ export function MembersAndMediaModal({
     if (!open) return;
     void loadMembers();
     void loadMedia();
-  }, [open, loadMembers, loadMedia]);
+    void loadMutedMembers();
+  }, [open, loadMembers, loadMedia, loadMutedMembers]);
 
   const filteredMembers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -116,6 +130,39 @@ export function MembersAndMediaModal({
   };
 
   const canManageRecovery = (target: PublicMember) => canRemoveTarget(target);
+
+  const handleToggleMuteChat = async (target: PublicMember) => {
+    const currentlyMuted = mutedIds.has(target.id);
+    setActionBusy(true);
+    try {
+      if (currentlyMuted) {
+        await apiRequest(`/api/chat/members/${encodeURIComponent(target.id)}/mute`, {
+          method: 'DELETE',
+        });
+        setMutedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(target.id);
+          return next;
+        });
+        onToast(`تم إلغاء كتم ${target.displayName} في المحادثة`);
+      } else {
+        await apiRequest(`/api/chat/members/${encodeURIComponent(target.id)}/mute`, {
+          method: 'POST',
+          body: { hours: 0 },
+        });
+        setMutedIds((prev) => {
+          const next = new Set(prev);
+          next.add(target.id);
+          return next;
+        });
+        onToast(`تم كتم ${target.displayName} عن الإرسال في المحادثة`);
+      }
+    } catch (err) {
+      onToast(err instanceof ApiError ? err.message : 'تعذر تحديث حالة الكتم', true);
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   const handleToggleRole = async (target: PublicMember) => {
     const nextRole: UserRole = target.role === 'admin' ? 'member' : 'admin';
@@ -269,6 +316,12 @@ export function MembersAndMediaModal({
                           <span className={m.role !== 'member' ? 'text-[var(--accent)] font-semibold' : ''}>
                             {ROLE_LABELS[m.role]}
                           </span>
+                          {mutedIds.has(m.id) && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-[var(--error)] font-semibold">مكتوم</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -380,14 +433,39 @@ export function MembersAndMediaModal({
                   </button>
 
                   {canRemoveTarget(selectedMember) && (
-                    <button
-                      type="button"
-                      disabled={actionBusy}
-                      onClick={() => setConfirmRemove(selectedMember)}
-                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[var(--error-soft)] text-[var(--error)] text-xs font-bold"
-                    >
-                      إزالة من الدفعة
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => handleToggleMuteChat(selectedMember)}
+                        className={`min-h-[44px] px-4 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
+                          mutedIds.has(selectedMember.id)
+                            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/40 text-[var(--accent)]'
+                            : 'bg-[var(--bg-surface)] border-[var(--divider)] text-[var(--text-primary)] hover:border-[var(--accent)]'
+                        }`}
+                      >
+                        {mutedIds.has(selectedMember.id) ? (
+                          <>
+                            <Icons.Volume2 className="w-3.5 h-3.5" />
+                            <span>إلغاء كتم المحادثة</span>
+                          </>
+                        ) : (
+                          <>
+                            <Icons.VolumeX className="w-3.5 h-3.5" />
+                            <span>كتم في المحادثة</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => setConfirmRemove(selectedMember)}
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-[var(--error-soft)] text-[var(--error)] text-xs font-bold"
+                      >
+                        إزالة من الدفعة
+                      </button>
+                    </>
                   )}
                 </div>
 

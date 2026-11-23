@@ -401,9 +401,26 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
     const generalAfter = await member.json('/api/chat/messages?channel=general');
     expect(generalAfter.data.messages.filter((m: any) => m.body === 'رسالة واحدة')).toHaveLength(1);
 
-    // 48h rule parity: old message by owner (>48h) cannot be deleted via ordinary DELETE even by owner
-    const oldOwnerDel = await owner.json('/api/chat/messages/1', { method: 'DELETE' });
-    expect(oldOwnerDel.status).toBe(403);
+    // 48h rule parity: non-owner cannot ordinary-DELETE own >48h message, while Owner CAN delete ANY >48h message for everyone
+    const admin = new TestClient(baseUrl);
+    await admin.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'admin_one', password: 'AdminPass123' }),
+    });
+    const oldAdminTs = Date.now() - 49 * 60 * 60 * 1000;
+    ctx.db
+      .prepare(
+        `INSERT INTO messages (id, channel, sender_id, sender_name_snapshot, body, created_at)
+         VALUES (99, 'general', 'usr_admin', 'المشرف الأول', 'رسالة قديمة للمشرف', ?)`
+      )
+      .run(oldAdminTs);
+
+    const oldAdminSelfDel = await admin.json('/api/chat/messages/99', { method: 'DELETE' });
+    expect(oldAdminSelfDel.status).toBe(403);
+
+    const ownerOldDel = await owner.json('/api/chat/messages/99', { method: 'DELETE' });
+    expect(ownerOldDel.status).toBe(200);
+    expect(ownerOldDel.data.ok).toBe(true);
 
     // File validation: valid PPTX passes with exact OOXML MIME & Arabic filename; plain ZIP masquerading as PPTX rejected!
     const validPptx = makeMinimalZip([
@@ -866,6 +883,215 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
     // Creator can delete own custom room
     expect((await member.json(`/api/majalis/rooms/${customRoomId}`, { method: 'DELETE' })).status).toBe(200);
   });
+
+  it('K: BOM/padded PDF upload, WhatsApp chat & group settings, starred/pinned, mute, and Owner complete wipe', async () => {
+    const owner = new TestClient(baseUrl);
+    const admin = new TestClient(baseUrl);
+    const member = new TestClient(baseUrl);
+
+    ctx.db
+      .prepare(
+        `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, created_at, updated_at)
+         VALUES ('usr_wa', 'طالب واتساب', 'wa_student', 'wa@example.invalid', ?, 'member', 'approved', 1, '', ?, ?)`
+      )
+      .run(hashPassword('WaPass123'), Date.now(), Date.now());
+
+    await owner.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'owner_one', password: 'OwnerPass123' }),
+    });
+    await admin.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'admin_one', password: 'AdminPass123' }),
+    });
+    await member.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'wa_student', password: 'WaPass123' }),
+    });
+
+    // 1. Real-world PDF with UTF-8 BOM + whitespace + >2KB trailing bytes before %%EOF succeeds; truncated PDF rejected
+    const bomPdf = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf, 0x20, 0x0a]),
+      Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n', 'ascii'),
+      Buffer.alloc(4096, 0x20),
+      Buffer.from('\n%%EOF\n', 'ascii'),
+    ]);
+    const pdfUp = await member.json('/api/assets/upload', {
+      method: 'POST',
+      headers: {
+        'X-Rahhala-Purpose': 'chat_file',
+        'X-Rahhala-Filename': encodeURIComponent('محاضرة_كاملة.pdf'),
+        'Content-Type': 'application/octet-stream',
+      },
+      body: new Uint8Array(bomPdf),
+    });
+    expect(pdfUp.status).toBe(201);
+    expect(pdfUp.data.asset.mime).toBe('application/pdf');
+
+    const truncatedPdf = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj', 'ascii');
+    const badPdf = await member.json('/api/assets/upload', {
+      method: 'POST',
+      headers: {
+        'X-Rahhala-Purpose': 'chat_file',
+        'X-Rahhala-Filename': encodeURIComponent('broken.pdf'),
+        'Content-Type': 'application/octet-stream',
+      },
+      body: new Uint8Array(truncatedPdf),
+    });
+    expect(badPdf.status).toBe(415);
+
+    // 2. Send a message with the PDF, star it, pin it, and check personal WhatsApp settings
+    const sentPdfMsg = await member.json('/api/chat/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'general',
+        body: 'ملخص PDF مهم',
+        fileAssetId: pdfUp.data.asset.assetId,
+      }),
+    });
+    expect(sentPdfMsg.status).toBe(201);
+    const pdfMsgId = sentPdfMsg.data.message.id;
+
+    // Personal chat settings update + readReceiptsEnabled toggle
+    const updSettings = await member.json('/api/chat/settings/me', {
+      method: 'PUT',
+      body: JSON.stringify({
+        wallpaper: 'islamic-geo',
+        fontSize: 'large',
+        enterToSend: false,
+        readReceiptsEnabled: false,
+        chatSoundsEnabled: false,
+      }),
+    });
+    expect(updSettings.status).toBe(200);
+    expect(updSettings.data.userSettings.wallpaper).toBe('islamic-geo');
+    expect(updSettings.data.userSettings.readReceiptsEnabled).toBe(false);
+
+    // Owner marks message read -> member has readReceiptsEnabled=false so sees 'delivered', not 'read'
+    await owner.json('/api/chat/read', {
+      method: 'POST',
+      body: JSON.stringify({ channel: 'general', highestMessageId: pdfMsgId }),
+    });
+    const listWithPrivacy = await member.json('/api/chat/messages?channel=general');
+    const fetchedOwnMsg = listWithPrivacy.data.messages.find((m: any) => m.id === pdfMsgId);
+    expect(fetchedOwnMsg.receiptStatus).not.toBe('read');
+
+    // Star & Pin
+    expect((await member.json(`/api/chat/messages/${pdfMsgId}/star`, { method: 'POST' })).status).toBe(200);
+    const starredList = await member.json('/api/chat/starred');
+    expect(starredList.data.messages.some((m: any) => m.id === pdfMsgId)).toBe(true);
+
+    const pinRes = await admin.json(`/api/chat/messages/${pdfMsgId}/pin`, { method: 'POST' });
+    expect(pinRes.status).toBe(200);
+    expect(pinRes.data.groupSettings.pinnedMessages.general.id).toBe(pdfMsgId);
+
+    // Export chat transcript
+    const expRes = await member.json('/api/chat/channels/general/export');
+    expect(expRes.status).toBe(200);
+    expect(expRes.data.text).toContain('ملخص PDF مهم');
+
+    // 3. Group Settings permissions & enforcement
+    const grpOwnerOnly = await owner.json('/api/chat/settings/group', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        groupName: 'مجموعة الدفعة الموثقة',
+        editInfoPolicy: 'owner',
+        allowReactions: false,
+        allowMedia: false,
+      }),
+    });
+    expect(grpOwnerOnly.status).toBe(200);
+    expect(grpOwnerOnly.data.groupSettings.groupName).toBe('مجموعة الدفعة الموثقة');
+
+    // Admin blocked from changing groupName when editInfoPolicy='owner'
+    expect(
+      (
+        await admin.json('/api/chat/settings/group', {
+          method: 'PATCH',
+          body: JSON.stringify({ groupName: 'محاولة تغيير' }),
+        })
+      ).status
+    ).toBe(403);
+
+    // Reactions disabled for members
+    expect(
+      (
+        await member.json(`/api/chat/messages/${pdfMsgId}/react`, {
+          method: 'POST',
+          body: JSON.stringify({ emoji: '👍' }),
+        })
+      ).status
+    ).toBe(403);
+
+    // 4. Member mute/unmute enforcement
+    expect((await admin.json('/api/chat/members/usr_wa/mute', { method: 'POST', body: '{}' })).status).toBe(200);
+    expect(
+      (
+        await member.json('/api/chat/messages', {
+          method: 'POST',
+          body: JSON.stringify({ channel: 'general', body: 'محاولة بعد الكتم' }),
+        })
+      ).status
+    ).toBe(403);
+    expect((await admin.json('/api/chat/members/usr_wa/mute', { method: 'DELETE' })).status).toBe(200);
+    expect(
+      (
+        await member.json('/api/chat/messages', {
+          method: 'POST',
+          body: JSON.stringify({ channel: 'general', body: 'رسالة بعد فك الكتم' }),
+        })
+      ).status
+    ).toBe(201);
+
+    // 5. Clear channel for me only hides for caller, keeps for owner
+    expect((await member.json('/api/chat/channels/general/clear-for-me', { method: 'POST' })).status).toBe(200);
+    const memAfterClear = await member.json('/api/chat/messages?channel=general');
+    expect(memAfterClear.data.messages).toHaveLength(0);
+    const ownerBeforeWipe = await owner.json('/api/chat/messages?channel=general');
+    expect(ownerBeforeWipe.data.messages.length).toBeGreaterThan(0);
+
+    // 6. Owner-only Complete Wipe (non-owner blocked 403; owner wipes channel + all channels cleanly)
+    expect((await admin.json('/api/chat/channels/general/wipe', { method: 'POST' })).status).toBe(403);
+    expect((await member.json('/api/chat/wipe-all', { method: 'POST' })).status).toBe(403);
+
+    const ownerTicket = await owner.json('/api/auth/ws-ticket');
+    const wsBase = baseUrl.replace('http://', 'ws://');
+    const ownerWs = new WebSocket(`${wsBase}/ws?ticket=${encodeURIComponent(ownerTicket.data.ticket)}`);
+    const wipedEventPromise = new Promise<any>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('WS wipe timeout')), 3000);
+      ownerWs.on('message', (raw) => {
+        const parsed = JSON.parse(raw.toString());
+        if (parsed.type === 'chat:channel_wiped') {
+          clearTimeout(t);
+          resolve(parsed);
+        }
+      });
+    });
+    await new Promise<void>((resolve) => ownerWs.once('open', () => resolve()));
+
+    const wipeChannelRes = await owner.json('/api/chat/channels/general/wipe', { method: 'POST' });
+    expect(wipeChannelRes.status).toBe(200);
+    const wipedEvt = await wipedEventPromise;
+    expect(wipedEvt.channel).toBe('general');
+
+    const ownerAfterWipe = await owner.json('/api/chat/messages?channel=general');
+    expect(ownerAfterWipe.data.messages).toHaveLength(0);
+
+    // Put a message in questions then wipe-all
+    await owner.json('/api/chat/messages', {
+      method: 'POST',
+      body: JSON.stringify({ channel: 'questions', body: 'رسالة للمحو الشامل' }),
+    });
+    expect((await owner.json('/api/chat/wipe-all', { method: 'POST' })).status).toBe(200);
+    const qAfterAll = await owner.json('/api/chat/messages?channel=questions');
+    expect(qAfterAll.data.messages).toHaveLength(0);
+
+    await new Promise<void>((resolve) => {
+      ownerWs.once('close', () => resolve());
+      ownerWs.close();
+    });
+  });
 });
+
 
 

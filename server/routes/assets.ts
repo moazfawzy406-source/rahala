@@ -91,7 +91,7 @@ export function createAssetsRouter(db: RahhalaDb, config: RahhalaConfig): Router
           error:
             purpose === 'chat_audio'
               ? 'حجم التسجيل الصوتي يتجاوز الحد الأقصى (١٢ ميجابايت)'
-              : 'حجم الملف يتجاوز الحد الأقصى المسموح به (١٥ ميجابايت)',
+              : 'حجم الملف يتجاوز الحد الأقصى المسموح به (٢٥ ميجابايت)',
         });
         return;
       }

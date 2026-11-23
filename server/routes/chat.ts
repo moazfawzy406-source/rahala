@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { RahhalaConfig } from '../config.ts';
 import { getSetting, setSetting, type RahhalaDb } from '../db.ts';
@@ -7,16 +8,146 @@ import { type AuthenticatedRequest, createAuthMiddleware } from '../middleware/a
 import type { RealtimeHub } from '../ws.ts';
 import type {
   ChannelId,
+  ChatFontSize,
   ChatMessage,
+  ChatWallpaperId,
+  DisappearingHours,
+  GroupChatSettings,
   MessageAttachment,
+  PinnedMessageSummary,
   ReactionSummary,
   ReceiptStatus,
   ReplyPreview,
+  UserChatSettings,
   UserRole,
 } from '../../shared/types.ts';
 
 const CHANNEL_ENUM = ['announcements', 'questions', 'general'] as const;
 const DELETE_FOR_ALL_LIMIT_MS = 48 * 60 * 60 * 1000; // 48 hours
+
+const DEFAULT_USER_CHAT_SETTINGS: UserChatSettings = {
+  wallpaper: 'default',
+  fontSize: 'medium',
+  enterToSend: true,
+  readReceiptsEnabled: true,
+  chatSoundsEnabled: true,
+};
+
+function readUserChatSettings(db: RahhalaDb, userId: string): UserChatSettings {
+  const row = db
+    .prepare(
+      `SELECT wallpaper, font_size, enter_to_send, read_receipts_enabled, chat_sounds_enabled
+       FROM user_chat_settings WHERE user_id = ?`
+    )
+    .get(userId) as
+    | {
+        wallpaper: ChatWallpaperId;
+        font_size: ChatFontSize;
+        enter_to_send: number;
+        read_receipts_enabled: number;
+        chat_sounds_enabled: number;
+      }
+    | undefined;
+  if (!row) return { ...DEFAULT_USER_CHAT_SETTINGS };
+  return {
+    wallpaper: row.wallpaper,
+    fontSize: row.font_size,
+    enterToSend: Boolean(row.enter_to_send),
+    readReceiptsEnabled: Boolean(row.read_receipts_enabled),
+    chatSoundsEnabled: Boolean(row.chat_sounds_enabled),
+  };
+}
+
+function readPinnedSummary(db: RahhalaDb, channel: ChannelId): PinnedMessageSummary | null {
+  const rawId = getSetting(db, `pinned_message_${channel}`, '');
+  const msgId = Number(rawId);
+  if (!rawId || !Number.isFinite(msgId) || msgId <= 0) return null;
+  const row = db
+    .prepare(
+      `SELECT m.id, m.channel, COALESCE(u.display_name, m.sender_name_snapshot) AS sender_name,
+              m.body, m.audio_asset_id, m.filename_snapshot, m.created_at, m.deleted_at
+       FROM messages m
+       LEFT JOIN users u ON u.id = m.sender_id
+       WHERE m.id = ? AND m.channel = ?`
+    )
+    .get(msgId, channel) as
+    | {
+        id: number;
+        channel: ChannelId;
+        sender_name: string;
+        body: string;
+        audio_asset_id: string | null;
+        filename_snapshot: string | null;
+        created_at: number;
+        deleted_at: number | null;
+      }
+    | undefined;
+  if (!row || row.deleted_at !== null) return null;
+  const excerpt =
+    row.body.trim() ||
+    (row.audio_asset_id ? 'رسالة صوتية' : row.filename_snapshot || 'مرفق');
+  return {
+    id: row.id,
+    channel: row.channel,
+    senderName: row.sender_name || 'عضو',
+    excerpt: excerpt.slice(0, 140),
+    createdAt: row.created_at,
+  };
+}
+
+function readGroupChatSettings(db: RahhalaDb): GroupChatSettings {
+  const rawHours = Number(getSetting(db, 'group_disappearing_hours', '0'));
+  const disappearingHours: DisappearingHours =
+    rawHours === 24 || rawHours === 168 || rawHours === 720 ? rawHours : 0;
+  const editPolicyRaw = getSetting(db, 'group_edit_info_policy', 'mods');
+  return {
+    groupName: getSetting(db, 'group_name', 'مجتمع رَحّالَة'),
+    groupDescription: getSetting(
+      db,
+      'group_description',
+      'ملتقى طلاب الدفعة لتبادل الملخصات والأسئلة والمناقشات العلمية.'
+    ),
+    groupRules: getSetting(
+      db,
+      'group_rules',
+      'الاحترام المتبادل، والالتزام بموضوع القناة، وعدم نشر روابط غير موثوقة.'
+    ),
+    chatLocked: getSetting(db, 'chat_locked', 'false') === 'true',
+    editInfoPolicy: editPolicyRaw === 'owner' ? 'owner' : 'mods',
+    allowMedia: getSetting(db, 'group_allow_media', 'true') !== 'false',
+    allowReactions: getSetting(db, 'group_allow_reactions', 'true') !== 'false',
+    disappearingHours,
+    pinnedMessages: {
+      announcements: readPinnedSummary(db, 'announcements'),
+      questions: readPinnedSummary(db, 'questions'),
+      general: readPinnedSummary(db, 'general'),
+    },
+  };
+}
+
+function getEffectiveCutoff(
+  db: RahhalaDb,
+  viewer: NonNullable<AuthenticatedRequest['authUser']>,
+  groupSettings?: GroupChatSettings
+): number {
+  const historyCutoff = getHistoryCutoff(viewer);
+  const gs = groupSettings ?? readGroupChatSettings(db);
+  const disappearingCutoff =
+    gs.disappearingHours > 0 ? Date.now() - gs.disappearingHours * 3_600_000 : 0;
+  return Math.max(historyCutoff, disappearingCutoff);
+}
+
+function isUserMutedInChat(db: RahhalaDb, userId: string): boolean {
+  const row = db
+    .prepare('SELECT muted_until FROM muted_chat_members WHERE user_id = ?')
+    .get(userId) as { muted_until: number | null } | undefined;
+  if (!row) return false;
+  if (row.muted_until !== null && Date.now() > row.muted_until) {
+    db.prepare('DELETE FROM muted_chat_members WHERE user_id = ?').run(userId);
+    return false;
+  }
+  return true;
+}
 
 interface RawMessageRow {
   id: number;
@@ -181,6 +312,15 @@ export function createChatRouter(
       }
     }
 
+    // Batch fetch starred state for viewer
+    const starredRows = db
+      .prepare(
+        `SELECT message_id FROM starred_messages WHERE user_id = ? AND message_id IN (${placeholders})`
+      )
+      .all(viewer.id, ...msgIds) as Array<{ message_id: number }>;
+    const starredSet = new Set(starredRows.map((x) => x.message_id));
+    const viewerSettings = readUserChatSettings(db, viewer.id);
+
     // Batch fetch receipts summary for own messages (or admin/owner)
     const receiptSummary = new Map<number, ReceiptStatus>();
     const ownMsgIds = rows
@@ -204,8 +344,8 @@ export function createChatRouter(
       const recMap = new Map(recRows.map((x) => [x.message_id, x]));
       for (const id of ownMsgIds) {
         const stat = recMap.get(id);
-        if (stat?.any_read) receiptSummary.set(id, 'read');
-        else if (stat?.any_delivered) receiptSummary.set(id, 'delivered');
+        if (stat?.any_read && viewerSettings.readReceiptsEnabled) receiptSummary.set(id, 'read');
+        else if (stat?.any_read || stat?.any_delivered) receiptSummary.set(id, 'delivered');
         else receiptSummary.set(id, 'sent');
       }
     }
@@ -216,8 +356,10 @@ export function createChatRouter(
       const within48h = now - r.created_at < DELETE_FOR_ALL_LIMIT_MS;
       const isMod = viewer.role === 'admin' || viewer.role === 'owner';
 
-      // Parity rule: 48-hour limit still applies to an admin's OWN message when using ordinary delete!
-      const canDeleteForEveryone = !isDeleted && (isOwn ? within48h : isMod);
+      // Owner can delete ANY message for everyone at any time;
+      // Admins/members respect the 48h rule on their own messages, while admins can moderate others' messages.
+      const canDeleteForEveryone =
+        !isDeleted && (viewer.role === 'owner' || (isOwn ? within48h : isMod));
 
       return {
         id: r.id,
@@ -236,6 +378,7 @@ export function createChatRouter(
         deletedAt: r.deleted_at,
         reactions: isDeleted ? [] : reactionsByMsg.get(r.id) ?? [],
         receiptStatus: !isDeleted && isOwn ? receiptSummary.get(r.id) ?? 'sent' : null,
+        starredByMe: !isDeleted && starredSet.has(r.id),
         canDeleteForEveryone,
         canEdit: !isDeleted && isOwn,
         canViewInfo: !isDeleted && (isOwn || isMod),
@@ -252,7 +395,8 @@ export function createChatRouter(
     }
     const channel = channelParam as ChannelId;
     const viewer = req.authUser!;
-    const cutoff = getHistoryCutoff(viewer);
+    const groupSettings = readGroupChatSettings(db);
+    const cutoff = getEffectiveCutoff(db, viewer, groupSettings);
     const limit = Math.min(80, Math.max(1, Number(req.query.limit) || 50));
     const beforeId = req.query.beforeId ? Number(req.query.beforeId) : null;
     const afterId = req.query.afterId ? Number(req.query.afterId) : null;
@@ -369,7 +513,8 @@ export function createChatRouter(
       return;
     }
     const viewer = req.authUser!;
-    const cutoff = getHistoryCutoff(viewer);
+    const groupSettings = readGroupChatSettings(db);
+    const cutoff = getEffectiveCutoff(db, viewer, groupSettings);
     const pattern = `%${q.replace(/[%_]/g, '\\$&')}%`;
 
     const rows = db
@@ -400,7 +545,7 @@ export function createChatRouter(
 
   router.get('/chat/unread', requireAuth, (req: AuthenticatedRequest, res) => {
     const viewer = req.authUser!;
-    const cutoff = getHistoryCutoff(viewer);
+    const cutoff = getEffectiveCutoff(db, viewer);
 
     const counts: Record<ChannelId, number> = {
       announcements: 0,
@@ -460,9 +605,19 @@ export function createChatRouter(
       return;
     }
 
-    const chatLocked = getSetting(db, 'chat_locked', 'false') === 'true';
-    if (chatLocked && viewer.role === 'member') {
+    const groupSettings = readGroupChatSettings(db);
+    if (groupSettings.chatLocked && viewer.role === 'member') {
       res.status(403).json({ error: 'المحادثة مقفولة حاليًا بواسطة الإدارة' });
+      return;
+    }
+
+    if (viewer.role === 'member' && isUserMutedInChat(db, viewer.id)) {
+      res.status(403).json({ error: 'تم كتمك مؤقتًا عن الإرسال في المحادثة بواسطة الإدارة' });
+      return;
+    }
+
+    if (viewer.role === 'member' && !groupSettings.allowMedia && (audioAssetId || fileAssetId)) {
+      res.status(403).json({ error: 'إرسال الملفات والوسائط معطل حاليًا في إعدادات الجروب' });
       return;
     }
 
@@ -693,17 +848,20 @@ export function createChatRouter(
     const isMod = viewer.role === 'admin' || viewer.role === 'owner';
     const within48h = Date.now() - msg.created_at < DELETE_FOR_ALL_LIMIT_MS;
 
-    if (isOwn) {
-      if (!within48h) {
-        res.status(403).json({ error: 'انتهت مهلة الـ ٤٨ ساعة المسموح بها لحذف رسالتك عند الكل' });
+    if (viewer.role !== 'owner') {
+      if (isOwn) {
+        if (!within48h) {
+          res.status(403).json({ error: 'انتهت مهلة الـ ٤٨ ساعة المسموح بها لحذف رسالتك عند الكل' });
+          return;
+        }
+      } else if (!isMod) {
+        res.status(403).json({ error: 'لا تملك صلاحية حذف رسائل الآخرين عند الكل' });
         return;
       }
-    } else if (!isMod) {
-      res.status(403).json({ error: 'لا تملك صلاحية حذف رسائل الآخرين عند الكل' });
-      return;
     }
 
     const now = Date.now();
+    let pinCleared = false;
     const tx = db.transaction(() => {
       db.prepare(
         `UPDATE messages
@@ -713,20 +871,26 @@ export function createChatRouter(
       ).run(now, viewer.id, msgId);
 
       db.prepare('DELETE FROM reactions WHERE message_id = ?').run(msgId);
+      db.prepare('DELETE FROM starred_messages WHERE message_id = ?').run(msgId);
       if (msg.audio_asset_id) {
         db.prepare('DELETE FROM assets WHERE id = ?').run(msg.audio_asset_id);
       }
       if (msg.file_asset_id) {
         db.prepare('DELETE FROM assets WHERE id = ?').run(msg.file_asset_id);
       }
+      if (getSetting(db, `pinned_message_${msg.channel}`, '') === String(msgId)) {
+        setSetting(db, `pinned_message_${msg.channel}`, '');
+        pinCleared = true;
+      }
     });
     tx();
 
     hub.broadcastMessageUpdated(msgId, msg.channel);
+    if (pinCleared) hub.broadcastGroupSettingsUpdated();
     res.json({ ok: true, deletedAt: now });
   });
 
-  // Owner-only final removal (حذف نهائي - no tombstone)
+  // Owner-only final removal (محو كامل للرسالة - no tombstone)
   router.delete(
     '/chat/messages/:id/purge',
     requireAuth,
@@ -749,14 +913,20 @@ export function createChatRouter(
         return;
       }
 
+      let pinCleared = false;
       const tx = db.transaction(() => {
         db.prepare('DELETE FROM messages WHERE id = ?').run(msgId);
         if (msg.audio_asset_id) db.prepare('DELETE FROM assets WHERE id = ?').run(msg.audio_asset_id);
         if (msg.file_asset_id) db.prepare('DELETE FROM assets WHERE id = ?').run(msg.file_asset_id);
+        if (getSetting(db, `pinned_message_${msg.channel}`, '') === String(msgId)) {
+          setSetting(db, `pinned_message_${msg.channel}`, '');
+          pinCleared = true;
+        }
       });
       tx();
 
       hub.broadcastMessageRemoved(msgId, msg.channel);
+      if (pinCleared) hub.broadcastGroupSettingsUpdated();
       res.json({ ok: true });
     }
   );
@@ -767,6 +937,12 @@ export function createChatRouter(
     const emoji = String(req.body?.emoji || '').trim();
     if (!emoji || emoji.length > 16) {
       res.status(400).json({ error: 'تفاعل غير صالح' });
+      return;
+    }
+
+    const groupSettings = readGroupChatSettings(db);
+    if (!groupSettings.allowReactions && req.authUser!.role === 'member') {
+      res.status(403).json({ error: 'التفاعلات معطلة حاليًا في إعدادات الجروب' });
       return;
     }
 
@@ -814,9 +990,10 @@ export function createChatRouter(
     }
 
     const viewer = req.authUser!;
-    const cutoff = getHistoryCutoff(viewer);
+    const cutoff = getEffectiveCutoff(db, viewer);
     const channel = channelParam as ChannelId;
     const now = Date.now();
+    const viewerSettings = readUserChatSettings(db, viewer.id);
 
     const readableMsgs = db
       .prepare(
@@ -854,15 +1031,17 @@ export function createChatRouter(
         );
         for (const m of readableMsgs) {
           if (m.sender_id && m.sender_id !== viewer.id) {
-            upsertReceipt.run(m.id, viewer.id, now, now);
+            upsertReceipt.run(m.id, viewer.id, now, viewerSettings.readReceiptsEnabled ? now : null);
           }
         }
       });
       tx();
 
-      for (const m of readableMsgs) {
-        if (m.sender_id && m.sender_id !== viewer.id) {
-          hub.broadcastReceiptUpdated(m.sender_id, m.id);
+      if (viewerSettings.readReceiptsEnabled) {
+        for (const m of readableMsgs) {
+          if (m.sender_id && m.sender_id !== viewer.id) {
+            hub.broadcastReceiptUpdated(m.sender_id, m.id);
+          }
         }
       }
     }
@@ -922,7 +1101,384 @@ export function createChatRouter(
     const locked = Boolean(req.body?.locked);
     setSetting(db, 'chat_locked', locked ? 'true' : 'false');
     hub.broadcastChatLockChanged(locked);
+    hub.broadcastGroupSettingsUpdated();
     res.json({ chatLocked: locked });
+  });
+
+  // WhatsApp-style personal Chat Settings & Group Settings
+  router.get('/chat/settings', requireAuth, (req: AuthenticatedRequest, res) => {
+    const viewer = req.authUser!;
+    const userSettings = readUserChatSettings(db, viewer.id);
+    const groupSettings = readGroupChatSettings(db);
+    const isMutedInChat = isUserMutedInChat(db, viewer.id);
+    const isMod = viewer.role === 'admin' || viewer.role === 'owner';
+    const mutedMemberIds = isMod
+      ? (
+          db
+            .prepare(
+              'SELECT user_id FROM muted_chat_members WHERE muted_until IS NULL OR muted_until > ?'
+            )
+            .all(Date.now()) as Array<{ user_id: string }>
+        ).map((x) => x.user_id)
+      : [];
+
+    res.json({
+      userSettings,
+      groupSettings,
+      isMutedInChat,
+      mutedMemberIds,
+    });
+  });
+
+  router.put('/chat/settings/me', requireAuth, (req: AuthenticatedRequest, res) => {
+    const schema = z.object({
+      wallpaper: z.enum(['default', 'islamic-geo', 'midnight', 'warm-parchment', 'emerald']).optional(),
+      fontSize: z.enum(['small', 'medium', 'large']).optional(),
+      enterToSend: z.boolean().optional(),
+      readReceiptsEnabled: z.boolean().optional(),
+      chatSoundsEnabled: z.boolean().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'إعدادات المحادثة غير صالحة' });
+      return;
+    }
+
+    const current = readUserChatSettings(db, req.authUser!.id);
+    const next: UserChatSettings = {
+      wallpaper: parsed.data.wallpaper ?? current.wallpaper,
+      fontSize: parsed.data.fontSize ?? current.fontSize,
+      enterToSend: parsed.data.enterToSend ?? current.enterToSend,
+      readReceiptsEnabled: parsed.data.readReceiptsEnabled ?? current.readReceiptsEnabled,
+      chatSoundsEnabled: parsed.data.chatSoundsEnabled ?? current.chatSoundsEnabled,
+    };
+
+    db.prepare(
+      `INSERT INTO user_chat_settings (user_id, wallpaper, font_size, enter_to_send, read_receipts_enabled, chat_sounds_enabled, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         wallpaper = excluded.wallpaper,
+         font_size = excluded.font_size,
+         enter_to_send = excluded.enter_to_send,
+         read_receipts_enabled = excluded.read_receipts_enabled,
+         chat_sounds_enabled = excluded.chat_sounds_enabled,
+         updated_at = excluded.updated_at`
+    ).run(
+      req.authUser!.id,
+      next.wallpaper,
+      next.fontSize,
+      next.enterToSend ? 1 : 0,
+      next.readReceiptsEnabled ? 1 : 0,
+      next.chatSoundsEnabled ? 1 : 0,
+      Date.now()
+    );
+
+    res.json({ userSettings: next });
+  });
+
+  router.patch('/chat/settings/group', requireAuth, requireAdminOrOwner, (req: AuthenticatedRequest, res) => {
+    const schema = z.object({
+      groupName: z.string().trim().min(2, 'اسم الجروب قصير جدًا').max(60).optional(),
+      groupDescription: z.string().trim().max(300).optional(),
+      groupRules: z.string().trim().max(400).optional(),
+      chatLocked: z.boolean().optional(),
+      editInfoPolicy: z.enum(['mods', 'owner']).optional(),
+      allowMedia: z.boolean().optional(),
+      allowReactions: z.boolean().optional(),
+      disappearingHours: z.union([z.literal(0), z.literal(24), z.literal(168), z.literal(720)]).optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message || 'إعدادات الجروب غير صالحة' });
+      return;
+    }
+
+    const actor = req.authUser!;
+    const current = readGroupChatSettings(db);
+
+    if (
+      (parsed.data.groupName !== undefined ||
+        parsed.data.groupDescription !== undefined ||
+        parsed.data.groupRules !== undefined) &&
+      current.editInfoPolicy === 'owner' &&
+      actor.role !== 'owner'
+    ) {
+      res.status(403).json({ error: 'تعديل معلومات الجروب متاح لمالك المنصة فقط حاليًا' });
+      return;
+    }
+
+    if (parsed.data.editInfoPolicy !== undefined && actor.role !== 'owner') {
+      res.status(403).json({ error: 'تغيير سياسة تعديل معلومات الجروب متاح للمالك فقط' });
+      return;
+    }
+
+    if (parsed.data.groupName !== undefined) setSetting(db, 'group_name', parsed.data.groupName);
+    if (parsed.data.groupDescription !== undefined) {
+      setSetting(db, 'group_description', parsed.data.groupDescription);
+    }
+    if (parsed.data.groupRules !== undefined) setSetting(db, 'group_rules', parsed.data.groupRules);
+    if (parsed.data.chatLocked !== undefined) {
+      setSetting(db, 'chat_locked', parsed.data.chatLocked ? 'true' : 'false');
+      hub.broadcastChatLockChanged(parsed.data.chatLocked);
+    }
+    if (parsed.data.editInfoPolicy !== undefined) {
+      setSetting(db, 'group_edit_info_policy', parsed.data.editInfoPolicy);
+    }
+    if (parsed.data.allowMedia !== undefined) {
+      setSetting(db, 'group_allow_media', parsed.data.allowMedia ? 'true' : 'false');
+    }
+    if (parsed.data.allowReactions !== undefined) {
+      setSetting(db, 'group_allow_reactions', parsed.data.allowReactions ? 'true' : 'false');
+    }
+    if (parsed.data.disappearingHours !== undefined) {
+      setSetting(db, 'group_disappearing_hours', String(parsed.data.disappearingHours));
+    }
+
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ groupSettings: readGroupChatSettings(db) });
+  });
+
+  // Star / Unstar messages (per user, WhatsApp-style)
+  router.get('/chat/starred', requireAuth, (req: AuthenticatedRequest, res) => {
+    const viewer = req.authUser!;
+    const cutoff = getEffectiveCutoff(db, viewer);
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.channel, m.sender_id, m.sender_name_snapshot,
+                u.display_name AS sender_display_name, u.username AS sender_username,
+                u.role AS sender_role, u.avatar_asset_id AS sender_avatar_asset_id,
+                m.body, m.reply_to_id, m.audio_asset_id, m.file_asset_id, m.filename_snapshot,
+                m.created_at, m.edited_at, m.deleted_at
+         FROM starred_messages sm
+         JOIN messages m ON m.id = sm.message_id
+         LEFT JOIN users u ON u.id = m.sender_id
+         WHERE sm.user_id = ?
+           AND m.deleted_at IS NULL
+           AND m.created_at >= ?
+           AND NOT EXISTS (SELECT 1 FROM message_hides mh WHERE mh.user_id = ? AND mh.message_id = m.id)
+         ORDER BY sm.starred_at DESC
+         LIMIT 80`
+      )
+      .all(viewer.id, cutoff, viewer.id) as RawMessageRow[];
+
+    res.json({ messages: hydrateMessages(rows, viewer) });
+  });
+
+  router.post('/chat/messages/:id/star', requireAuth, (req: AuthenticatedRequest, res) => {
+    const msgId = Number(req.params.id);
+    const msg = db
+      .prepare('SELECT id, created_at, deleted_at FROM messages WHERE id = ?')
+      .get(msgId) as { id: number; created_at: number; deleted_at: number | null } | undefined;
+
+    if (!msg || !canViewerAccessMessage(db, req.authUser!, msg)) {
+      res.status(403).json({ error: 'لا يمكنك تمييز هذه الرسالة' });
+      return;
+    }
+
+    db.prepare(
+      `INSERT INTO starred_messages (user_id, message_id, starred_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, message_id) DO NOTHING`
+    ).run(req.authUser!.id, msgId, Date.now());
+    res.json({ starred: true });
+  });
+
+  router.delete('/chat/messages/:id/star', requireAuth, (req: AuthenticatedRequest, res) => {
+    const msgId = Number(req.params.id);
+    db.prepare('DELETE FROM starred_messages WHERE user_id = ? AND message_id = ?').run(
+      req.authUser!.id,
+      msgId
+    );
+    res.json({ starred: false });
+  });
+
+  // Pin / Unpin message per channel (admin/owner)
+  router.post('/chat/messages/:id/pin', requireAuth, requireAdminOrOwner, (req: AuthenticatedRequest, res) => {
+    const msgId = Number(req.params.id);
+    const msg = db
+      .prepare('SELECT id, channel, deleted_at FROM messages WHERE id = ?')
+      .get(msgId) as { id: number; channel: ChannelId; deleted_at: number | null } | undefined;
+    if (!msg || msg.deleted_at !== null) {
+      res.status(404).json({ error: 'الرسالة غير موجودة أو محذوفة' });
+      return;
+    }
+    setSetting(db, `pinned_message_${msg.channel}`, String(msg.id));
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ groupSettings: readGroupChatSettings(db) });
+  });
+
+  router.delete('/chat/pins/:channel', requireAuth, requireAdminOrOwner, (req, res) => {
+    const ch = String(req.params.channel);
+    if (!CHANNEL_ENUM.includes(ch as ChannelId)) {
+      res.status(400).json({ error: 'القناة غير معروفة' });
+      return;
+    }
+    setSetting(db, `pinned_message_${ch}`, '');
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ groupSettings: readGroupChatSettings(db) });
+  });
+
+  // Clear current channel for current user only (مسح الدردشة عندي)
+  router.post('/chat/channels/:channel/clear-for-me', requireAuth, (req: AuthenticatedRequest, res) => {
+    const ch = String(req.params.channel);
+    if (!CHANNEL_ENUM.includes(ch as ChannelId)) {
+      res.status(400).json({ error: 'القناة غير معروفة' });
+      return;
+    }
+    const viewer = req.authUser!;
+    const cutoff = getEffectiveCutoff(db, viewer);
+    const now = Date.now();
+    const ids = db
+      .prepare('SELECT id FROM messages WHERE channel = ? AND created_at >= ?')
+      .all(ch, cutoff) as Array<{ id: number }>;
+
+    const tx = db.transaction(() => {
+      const ins = db.prepare(
+        `INSERT INTO message_hides (user_id, message_id, hidden_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id, message_id) DO NOTHING`
+      );
+      for (const row of ids) {
+        ins.run(viewer.id, row.id, now);
+      }
+    });
+    tx();
+    res.json({ ok: true, hiddenCount: ids.length });
+  });
+
+  // Export channel transcript as TXT (تصدير المحادثة)
+  router.get('/chat/channels/:channel/export', requireAuth, (req: AuthenticatedRequest, res) => {
+    const ch = String(req.params.channel);
+    if (!CHANNEL_ENUM.includes(ch as ChannelId)) {
+      res.status(400).json({ error: 'القناة غير معروفة' });
+      return;
+    }
+    const viewer = req.authUser!;
+    const cutoff = getEffectiveCutoff(db, viewer);
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.channel, m.sender_id, m.sender_name_snapshot,
+                u.display_name AS sender_display_name, u.username AS sender_username,
+                u.role AS sender_role, u.avatar_asset_id AS sender_avatar_asset_id,
+                m.body, m.reply_to_id, m.audio_asset_id, m.file_asset_id, m.filename_snapshot,
+                m.created_at, m.edited_at, m.deleted_at
+         FROM messages m
+         LEFT JOIN users u ON u.id = m.sender_id
+         WHERE m.channel = ?
+           AND m.created_at >= ?
+           AND m.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM message_hides mh WHERE mh.user_id = ? AND mh.message_id = m.id)
+         ORDER BY m.id ASC
+         LIMIT 500`
+      )
+      .all(ch, cutoff, viewer.id) as RawMessageRow[];
+
+    const lines = rows.map((r) => {
+      const ts = new Date(r.created_at).toLocaleString('ar-EG');
+      const sender = r.sender_display_name || r.sender_name_snapshot || 'عضو';
+      const content =
+        r.body.trim() ||
+        (r.audio_asset_id ? '[رسالة صوتية]' : r.filename_snapshot ? `[ملف: ${r.filename_snapshot}]` : '');
+      return `[${ts}] ${sender}: ${content}`;
+    });
+    res.json({ filename: `rahhala-${ch}-chat.txt`, text: lines.join('\n') });
+  });
+
+  // Mute / unmute member in chat (admin/owner)
+  router.post('/chat/members/:userId/mute', requireAuth, requireAdminOrOwner, (req: AuthenticatedRequest, res) => {
+    const targetId = String(req.params.userId);
+    const actor = req.authUser!;
+    const target = db
+      .prepare('SELECT id, role FROM users WHERE id = ?')
+      .get(targetId) as { id: string; role: UserRole } | undefined;
+    if (!target) {
+      res.status(404).json({ error: 'العضو غير موجود' });
+      return;
+    }
+    if (target.role === 'owner' || target.id === actor.id) {
+      res.status(403).json({ error: 'لا يمكن كتم هذا الحساب' });
+      return;
+    }
+    if (target.role === 'admin' && actor.role !== 'owner') {
+      res.status(403).json({ error: 'كتم المشرف متاح للمالك فقط' });
+      return;
+    }
+    const hours = Number(req.body?.hours || 0);
+    const now = Date.now();
+    const mutedUntil = hours > 0 ? now + hours * 3_600_000 : null;
+    db.prepare(
+      `INSERT INTO muted_chat_members (user_id, muted_by_id, muted_until, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         muted_by_id = excluded.muted_by_id,
+         muted_until = excluded.muted_until,
+         created_at = excluded.created_at`
+    ).run(targetId, actor.id, mutedUntil, now);
+
+    hub.notifyUserUpdated(targetId);
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ ok: true });
+  });
+
+  router.delete('/chat/members/:userId/mute', requireAuth, requireAdminOrOwner, (req: AuthenticatedRequest, res) => {
+    const targetId = String(req.params.userId);
+    db.prepare('DELETE FROM muted_chat_members WHERE user_id = ?').run(targetId);
+    hub.notifyUserUpdated(targetId);
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ ok: true });
+  });
+
+  // Owner-only Complete Channel Wipe (المحو الكامل للقناة)
+  router.post('/chat/channels/:channel/wipe', requireAuth, requireOwner, (req: AuthenticatedRequest, res) => {
+    const ch = String(req.params.channel);
+    if (!CHANNEL_ENUM.includes(ch as ChannelId)) {
+      res.status(400).json({ error: 'القناة غير معروفة' });
+      return;
+    }
+    const assetRows = db
+      .prepare(
+        'SELECT audio_asset_id, file_asset_id FROM messages WHERE channel = ? AND (audio_asset_id IS NOT NULL OR file_asset_id IS NOT NULL)'
+      )
+      .all(ch) as Array<{ audio_asset_id: string | null; file_asset_id: string | null }>;
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM messages WHERE channel = ?').run(ch);
+      db.prepare('DELETE FROM channel_reads WHERE channel = ?').run(ch);
+      setSetting(db, `pinned_message_${ch}`, '');
+      const delAsset = db.prepare('DELETE FROM assets WHERE id = ?');
+      for (const row of assetRows) {
+        if (row.audio_asset_id) delAsset.run(row.audio_asset_id);
+        if (row.file_asset_id) delAsset.run(row.file_asset_id);
+      }
+      db.prepare(
+        'INSERT INTO admin_audits (id, actor_id, action, target_id, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(`aud_${randomUUID().slice(0, 12)}`, req.authUser!.id, 'channel_wiped', ch, '{}', Date.now());
+    });
+    tx();
+
+    hub.broadcastChannelWiped(ch as ChannelId);
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ ok: true });
+  });
+
+  // Owner-only Complete Wipe Across ALL Chat Channels (المحو الكامل للمحادثة بالكامل)
+  router.post('/chat/wipe-all', requireAuth, requireOwner, (req: AuthenticatedRequest, res) => {
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM messages').run();
+      db.prepare('DELETE FROM channel_reads').run();
+      db.prepare("DELETE FROM assets WHERE binding_type IN ('chat_file', 'chat_audio')").run();
+      for (const ch of CHANNEL_ENUM) {
+        setSetting(db, `pinned_message_${ch}`, '');
+      }
+      db.prepare(
+        'INSERT INTO admin_audits (id, actor_id, action, target_id, metadata_json, created_at) VALUES (?, ?, ?, NULL, ?, ?)'
+      ).run(`aud_${randomUUID().slice(0, 12)}`, req.authUser!.id, 'chat_wiped_all', '{}', Date.now());
+    });
+    tx();
+
+    hub.broadcastChannelWiped('all');
+    hub.broadcastGroupSettingsUpdated();
+    res.json({ ok: true });
   });
 
   return router;

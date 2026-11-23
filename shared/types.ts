@@ -133,9 +133,42 @@ export interface ChatMessage {
   deletedAt: number | null;
   reactions: ReactionSummary[];
   receiptStatus: ReceiptStatus | null;
+  starredByMe?: boolean;
   canDeleteForEveryone: boolean;
   canEdit: boolean;
   canViewInfo: boolean;
+}
+
+export type ChatWallpaperId = 'default' | 'islamic-geo' | 'midnight' | 'warm-parchment' | 'emerald';
+export type ChatFontSize = 'small' | 'medium' | 'large';
+export type DisappearingHours = 0 | 24 | 168 | 720;
+
+export interface UserChatSettings {
+  wallpaper: ChatWallpaperId;
+  fontSize: ChatFontSize;
+  enterToSend: boolean;
+  readReceiptsEnabled: boolean;
+  chatSoundsEnabled: boolean;
+}
+
+export interface PinnedMessageSummary {
+  id: number;
+  channel: ChannelId;
+  senderName: string;
+  excerpt: string;
+  createdAt: number;
+}
+
+export interface GroupChatSettings {
+  groupName: string;
+  groupDescription: string;
+  groupRules: string;
+  chatLocked: boolean;
+  editInfoPolicy: 'mods' | 'owner';
+  allowMedia: boolean;
+  allowReactions: boolean;
+  disappearingHours: DisappearingHours;
+  pinnedMessages: Record<ChannelId, PinnedMessageSummary | null>;
 }
 
 export interface MessageReceiptDetail {

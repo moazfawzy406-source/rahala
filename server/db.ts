@@ -334,6 +334,38 @@ const MIGRATIONS: Migration[] = [
         ON majalis_messages(room_id, created_at ASC);
     `,
   },
+  {
+    version: 7,
+    name: 'whatsapp_chat_and_group_settings',
+    sql: `
+      CREATE TABLE IF NOT EXISTS user_chat_settings (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        wallpaper TEXT NOT NULL CHECK(wallpaper IN ('default', 'islamic-geo', 'midnight', 'warm-parchment', 'emerald')) DEFAULT 'default',
+        font_size TEXT NOT NULL CHECK(font_size IN ('small', 'medium', 'large')) DEFAULT 'medium',
+        enter_to_send INTEGER NOT NULL DEFAULT 1,
+        read_receipts_enabled INTEGER NOT NULL DEFAULT 1,
+        chat_sounds_enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS starred_messages (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        starred_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, message_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_starred_messages_user
+        ON starred_messages(user_id, starred_at DESC);
+
+      CREATE TABLE IF NOT EXISTS muted_chat_members (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        muted_by_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        muted_until INTEGER,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function openDatabase(dbPath: string): RahhalaDb {

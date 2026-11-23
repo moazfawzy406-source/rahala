@@ -40,7 +40,7 @@ export function loadConfig(overrides?: Partial<RahhalaConfig>): RahhalaConfig {
     isProduction,
     previewDemoEnabled,
     sessionIdleMs: overrides?.sessionIdleMs ?? 2 * 60 * 60 * 1000, // 2 hours
-    maxUploadBytes: overrides?.maxUploadBytes ?? 15_000_000,
+    maxUploadBytes: overrides?.maxUploadBytes ?? 25_000_000,
     maxVoiceBytes: overrides?.maxVoiceBytes ?? 12_000_000,
     maxAvatarBytes: overrides?.maxAvatarBytes ?? 4_000_000,
   };

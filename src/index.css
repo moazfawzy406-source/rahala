@@ -207,6 +207,38 @@ textarea:focus-visible {
   padding-bottom: max(8px, env(safe-area-inset-bottom));
 }
 
+/* WhatsApp-style customizable chat wallpapers */
+.chat-wallpaper-default {
+  background-color: transparent;
+}
+
+.chat-wallpaper-islamic-geo {
+  background-image:
+    radial-gradient(circle at 25px 25px, var(--accent-soft) 2px, transparent 2.5px),
+    radial-gradient(circle at 75px 75px, var(--accent-soft) 2px, transparent 2.5px),
+    linear-gradient(45deg, transparent 48%, var(--divider) 49%, var(--divider) 51%, transparent 52%),
+    linear-gradient(-45deg, transparent 48%, var(--divider) 49%, var(--divider) 51%, transparent 52%);
+  background-size: 50px 50px;
+}
+
+.chat-wallpaper-midnight {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 15%, rgba(56, 114, 192, 0.16), transparent 65%),
+    radial-gradient(ellipse 70% 55% at 85% 80%, rgba(227, 178, 60, 0.10), transparent 65%);
+}
+
+.chat-wallpaper-warm-parchment {
+  background-image:
+    radial-gradient(ellipse 90% 70% at 50% 0%, rgba(184, 131, 20, 0.11), transparent 70%),
+    repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(138, 94, 27, 0.05) 28px);
+}
+
+.chat-wallpaper-emerald {
+  background-image:
+    radial-gradient(ellipse 75% 60% at 15% 20%, rgba(47, 158, 108, 0.14), transparent 68%),
+    radial-gradient(ellipse 65% 55% at 85% 85%, rgba(59, 168, 160, 0.12), transparent 68%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
