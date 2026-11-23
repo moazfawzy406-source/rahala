@@ -379,10 +379,20 @@ export function createAdminRouter(
     requireAuth,
     requireAdminOrOwner,
     (req: AuthenticatedRequest, res) => {
+      const iceEntrySchema = z.object({
+        urls: z.union([
+          z.string().trim().min(5).max(300),
+          z.array(z.string().trim().min(5).max(300)).min(1).max(6),
+        ]),
+        username: z.string().trim().max(200).optional(),
+        credential: z.string().trim().max(200).optional(),
+      });
       const schema = z.object({
         institutionSubtitle: z.string().trim().max(120).optional(),
         meetingProviderUrl: z.string().trim().max(500).optional(),
         meetingMode: z.enum(['builtin', 'external', 'unconfigured']).optional(),
+        defaultRoomAccessType: z.enum(['open', 'knock']).optional(),
+        iceServers: z.array(iceEntrySchema).max(10).optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
@@ -394,17 +404,43 @@ export function createAdminRouter(
         setSetting(db, 'institution_subtitle', parsed.data.institutionSubtitle);
       }
 
+      if (parsed.data.meetingMode !== undefined) {
+        setSetting(db, 'meeting_mode', parsed.data.meetingMode);
+        if (parsed.data.meetingMode !== 'external') {
+          setSetting(db, 'meeting_provider_url', '');
+        }
+      }
+
       if (parsed.data.meetingProviderUrl !== undefined) {
         const url = parsed.data.meetingProviderUrl;
         if (url !== '' && !isSafeHttpUrl(url)) {
           res.status(400).json({ error: 'رابط مزود الاجتماعات لازم يبدأ بـ https:// أو http://' });
           return;
         }
-        setSetting(db, 'meeting_provider_url', url);
+        if (parsed.data.meetingMode === undefined || parsed.data.meetingMode === 'external') {
+          setSetting(db, 'meeting_provider_url', url);
+        }
       }
 
-      if (parsed.data.meetingMode !== undefined) {
-        setSetting(db, 'meeting_mode', parsed.data.meetingMode);
+      if (parsed.data.defaultRoomAccessType !== undefined) {
+        setSetting(db, 'default_room_access_type', parsed.data.defaultRoomAccessType);
+      }
+
+      if (parsed.data.iceServers !== undefined) {
+        for (const entry of parsed.data.iceServers) {
+          const urlsList = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+          for (const u of urlsList) {
+            if (!/^(stuns?|turns?):/i.test(u)) {
+              res.status(400).json({ error: 'خوادم WebRTC لازم تبدأ بـ stun: أو stuns: أو turn: أو turns:' });
+              return;
+            }
+          }
+        }
+        setSetting(
+          db,
+          'ice_servers_json',
+          parsed.data.iceServers.length > 0 ? JSON.stringify(parsed.data.iceServers) : ''
+        );
       }
 
       writeAudit(db, req.authUser!.id, 'settings_updated', null);

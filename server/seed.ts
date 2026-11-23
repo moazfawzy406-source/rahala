@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { RahhalaConfig } from './config.ts';
 import { getSetting, setSetting, type RahhalaDb } from './db.ts';
 import { hashPassword } from './lib/crypto.ts';
+import { isSafeHttpUrl } from './lib/validation.ts';
 
 export function seedInitialData(db: RahhalaDb, config: RahhalaConfig): void {
   const existingSubtitle = getSetting(db, 'institution_subtitle', '');
@@ -11,7 +12,10 @@ export function seedInitialData(db: RahhalaDb, config: RahhalaConfig): void {
   if (!getSetting(db, 'chat_locked', '')) {
     setSetting(db, 'chat_locked', 'false');
   }
-  if (config.meetingProviderUrl && !getSetting(db, 'meeting_provider_url', '')) {
+  const storedMeetingUrl = getSetting(db, 'meeting_provider_url', '').trim();
+  if (storedMeetingUrl && !isSafeHttpUrl(storedMeetingUrl)) {
+    setSetting(db, 'meeting_provider_url', '');
+  } else if (config.meetingProviderUrl && isSafeHttpUrl(config.meetingProviderUrl) && !storedMeetingUrl) {
     setSetting(db, 'meeting_provider_url', config.meetingProviderUrl);
   }
 

@@ -366,6 +366,19 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 8,
+    name: 'majalis_google_meet_settings',
+    sql: `
+      ALTER TABLE majalis_rooms ADD COLUMN access_type TEXT NOT NULL CHECK(access_type IN ('open', 'knock')) DEFAULT 'open';
+      ALTER TABLE majalis_rooms ADD COLUMN room_locked INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE majalis_rooms ADD COLUMN allow_mic INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE majalis_rooms ADD COLUMN allow_cam INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE majalis_rooms ADD COLUMN allow_screen_share INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE majalis_rooms ADD COLUMN allow_chat INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE majalis_rooms ADD COLUMN mute_on_entry INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function openDatabase(dbPath: string): RahhalaDb {

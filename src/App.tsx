@@ -46,6 +46,11 @@ const DEFAULT_CONFIG: AppPublicConfig = {
   chatLocked: false,
   meetingMode: 'builtin',
   meetingExternalUrl: '',
+  defaultRoomAccessType: 'open',
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
   emailRecoveryEnabled: false,
   previewDemoEnabled: false,
 };
@@ -204,6 +209,33 @@ export default function App() {
   const majalisController = useMajalisController(config, user, activeTab === 'majalis', showToast);
   const subjectPreferences = useSubjectPreferences(user, showToast);
   const studyReminders = useStudyReminders(user, showToast, subjectPreferences.getSubjectTone);
+
+  const [pendingInviteRoomId, setPendingInviteRoomId] = useState<string | null>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('majlis')?.trim() || null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (!user || !pendingInviteRoomId) return;
+    setActiveTab('majalis');
+    const matched = majalisController.rooms.find((r) => r.id === pendingInviteRoomId);
+    if (matched) {
+      setPendingInviteRoomId(null);
+      try {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete('majlis');
+        window.history.replaceState({}, '', nextUrl.pathname + nextUrl.search);
+      } catch {
+        // ignore URL cleanup error
+      }
+      if (!majalisController.joined) {
+        void majalisController.openPreJoin(matched.id);
+      }
+    }
+  }, [user, pendingInviteRoomId, majalisController]);
 
   const openRemindersForSubject = useCallback((subjectId?: string | null) => {
     setReminderSubjectId(subjectId ?? null);

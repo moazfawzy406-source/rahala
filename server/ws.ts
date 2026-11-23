@@ -12,12 +12,17 @@ import {
 import { randomUUID } from 'node:crypto';
 import type {
   ChannelId,
+  MajalisAccessType,
   MajalisChatMessageRecord,
+  MajalisKnockRequest,
   MajalisParticipantInfo,
   MajalisParticipationMode,
+  MajalisReactionEvent,
+  MajalisRoomSettings,
   MajalisRoomSummary,
   MajalisTimerPhase,
   MajalisTimerState,
+  UserRole,
 } from '../shared/types.ts';
 
 const MAJALIS_TIMER_DURATIONS: Record<MajalisTimerPhase, number> = {
@@ -26,9 +31,12 @@ const MAJALIS_TIMER_DURATIONS: Record<MajalisTimerPhase, number> = {
   break: 5 * 60_000,
 };
 
+const ALLOWED_MEETING_REACTIONS = new Set(['👍', '👏', '❤️', '🔥', '💡', '🎉']);
+
 interface ClientMeta {
   ws: WebSocket;
   userId: string;
+  userRole: UserRole;
   sessionId: string;
   displayName: string;
   avatarAssetId: string | null;
@@ -40,6 +48,18 @@ interface ClientMeta {
   screenSharing: boolean;
   handRaised: boolean;
   majalisJoinedAt: number;
+}
+
+interface RoomSettingsRow {
+  id: string;
+  creator_id: string | null;
+  access_type: MajalisAccessType;
+  room_locked: number;
+  allow_mic: number;
+  allow_cam: number;
+  allow_screen_share: number;
+  allow_chat: number;
+  mute_on_entry: number;
 }
 
 export interface RealtimeHub {
@@ -55,6 +75,8 @@ export interface RealtimeHub {
   broadcastChallengesUpdated: () => void;
   getMajalisRoomsSnapshot: () => MajalisRoomSummary[];
   broadcastMajalisLobbyUpdated: () => void;
+  applyMajalisRoomSettings: (roomId: string, settings: MajalisRoomSettings) => void;
+  endMajalisMeetingForAll: (roomId: string, actorName: string) => void;
   broadcastMajalisRoomChat: (roomId: string, message: MajalisChatMessageRecord) => void;
   controlMajalisRoomTimer: (
     roomId: string,
@@ -76,8 +98,44 @@ export function setupWebSocketHub(
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<ClientMeta>();
   const roomTimers = new Map<string, MajalisTimerState>();
+  const roomKnocks = new Map<string, Map<string, MajalisKnockRequest>>();
+  const roomAdmittedUsers = new Map<string, Set<string>>();
+  const roomSpotlights = new Map<string, string | null>();
   const signingSecret = getOrCreateSigningSecret(db);
   let isClosed = false;
+
+  function mapRoomSettings(row: RoomSettingsRow): MajalisRoomSettings {
+    return {
+      accessType: row.access_type === 'knock' ? 'knock' : 'open',
+      roomLocked: Boolean(row.room_locked),
+      allowMic: Boolean(row.allow_mic),
+      allowCam: Boolean(row.allow_cam),
+      allowScreenShare: Boolean(row.allow_screen_share),
+      allowChat: Boolean(row.allow_chat),
+      muteOnEntry: Boolean(row.mute_on_entry),
+    };
+  }
+
+  function getRoomRow(roomId: string): RoomSettingsRow | undefined {
+    if (isClosed || !db.open) return undefined;
+    return db
+      .prepare(
+        `SELECT id, creator_id, access_type, room_locked, allow_mic, allow_cam, allow_screen_share, allow_chat, mute_on_entry
+         FROM majalis_rooms WHERE id = ?`
+      )
+      .get(roomId) as RoomSettingsRow | undefined;
+  }
+
+  function isRoomHost(room: { creator_id: string | null }, userId: string, userRole: UserRole): boolean {
+    if (userRole === 'owner' || userRole === 'admin') return true;
+    return Boolean(room.creator_id && room.creator_id === userId);
+  }
+
+  function getKnockQueue(roomId: string): MajalisKnockRequest[] {
+    const map = roomKnocks.get(roomId);
+    if (!map) return [];
+    return Array.from(map.values()).sort((a, b) => a.requestedAt - b.requestedAt);
+  }
 
   function defaultTimerState(phase: MajalisTimerPhase = 'focus'): MajalisTimerState {
     const durationMs = MAJALIS_TIMER_DURATIONS[phase];
@@ -142,7 +200,8 @@ export function setupWebSocketHub(
     const rows = db
       .prepare(
         `SELECT r.id, r.title, r.subject_id, r.subject_name_snapshot, s.accent_color AS subject_accent_color,
-                r.creator_id, r.creator_name_snapshot, r.is_default, r.created_at
+                r.creator_id, r.creator_name_snapshot, r.is_default, r.created_at,
+                r.access_type, r.room_locked, r.allow_mic, r.allow_cam, r.allow_screen_share, r.allow_chat, r.mute_on_entry
          FROM majalis_rooms r
          LEFT JOIN subjects s ON s.id = r.subject_id
          ORDER BY r.is_default DESC, r.created_at ASC`
@@ -157,6 +216,13 @@ export function setupWebSocketHub(
       creator_name_snapshot: string;
       is_default: number;
       created_at: number;
+      access_type: MajalisAccessType;
+      room_locked: number;
+      allow_mic: number;
+      allow_cam: number;
+      allow_screen_share: number;
+      allow_chat: number;
+      mute_on_entry: number;
     }>;
 
     return rows.map((r) => {
@@ -174,6 +240,8 @@ export function setupWebSocketHub(
         activeCount: participants.length,
         participants,
         timer: resolveEffectiveTimer(r.id),
+        settings: mapRoomSettings(r),
+        spotlightUserId: roomSpotlights.get(r.id) ?? null,
       };
     });
   }
@@ -189,6 +257,7 @@ export function setupWebSocketHub(
     const fallbackSessionToken = extractSessionToken(request);
 
     let authedUserId: string | null = null;
+    let authedUserRole: UserRole = 'member';
     let authedSessionId: string | null = null;
     let authedDisplayName = '';
     let authedAvatarAssetId: string | null = null;
@@ -202,7 +271,7 @@ export function setupWebSocketHub(
         const s = db
           .prepare(
             `SELECT s.id, s.user_id, s.revoked_at, s.last_activity_at, s.expires_at,
-                    u.display_name, u.avatar_asset_id, u.approval_status
+                    u.display_name, u.avatar_asset_id, u.approval_status, u.role
              FROM sessions s
              JOIN users u ON u.id = s.user_id
              WHERE s.id = ? AND s.user_id = ?`
@@ -217,6 +286,7 @@ export function setupWebSocketHub(
               display_name: string;
               avatar_asset_id: string | null;
               approval_status: string;
+              role: UserRole;
             }
           | undefined;
         const now = Date.now();
@@ -228,6 +298,7 @@ export function setupWebSocketHub(
           now - s.last_activity_at <= config.sessionIdleMs
         ) {
           authedUserId = s.user_id;
+          authedUserRole = s.role;
           authedSessionId = s.id;
           authedDisplayName = s.display_name;
           authedAvatarAssetId = s.avatar_asset_id;
@@ -237,6 +308,7 @@ export function setupWebSocketHub(
       const resolved = resolveActiveSession(db, config, fallbackSessionToken, { touchActivity: false });
       if (resolved.ok) {
         authedUserId = resolved.data.user.id;
+        authedUserRole = resolved.data.user.role;
         authedSessionId = resolved.data.sessionId;
         authedDisplayName = resolved.data.user.displayName;
         authedAvatarAssetId = resolved.data.user.avatarAssetId;
@@ -253,6 +325,7 @@ export function setupWebSocketHub(
       const meta: ClientMeta = {
         ws,
         userId: authedUserId!,
+        userRole: authedUserRole,
         sessionId: authedSessionId!,
         displayName: authedDisplayName,
         avatarAssetId: authedAvatarAssetId,
@@ -284,9 +357,31 @@ export function setupWebSocketHub(
     }
   }
 
+  function broadcastKnockQueue(roomId: string): void {
+    const roomRow = getRoomRow(roomId);
+    if (!roomRow) return;
+    const queue = getKnockQueue(roomId);
+    for (const client of clients) {
+      if (
+        (client.inMajalis && client.majalisRoomId === roomId && isRoomHost(roomRow, client.userId, client.userRole)) ||
+        (roomRow.creator_id === client.userId)
+      ) {
+        sendJsonSafe(client.ws, {
+          type: 'majalis:knock_queue',
+          roomId,
+          queue,
+        });
+      }
+    }
+  }
+
   function broadcastRoomState(roomId: string): void {
     const participants = getParticipantsForRoom(roomId);
     const timer = resolveEffectiveTimer(roomId);
+    const roomRow = getRoomRow(roomId);
+    const settings = roomRow ? mapRoomSettings(roomRow) : undefined;
+    const spotlightUserId = roomSpotlights.get(roomId) ?? null;
+
     for (const client of clients) {
       if (client.inMajalis && client.majalisRoomId === roomId) {
         sendJsonSafe(client.ws, {
@@ -294,9 +389,84 @@ export function setupWebSocketHub(
           roomId,
           participants,
           timer,
+          settings,
+          spotlightUserId,
         });
       }
     }
+  }
+
+  function enforceSettingsOnRoomParticipants(roomId: string, settings: MajalisRoomSettings): void {
+    const roomRow = getRoomRow(roomId);
+    if (!roomRow) return;
+
+    for (const client of clients) {
+      if (!client.inMajalis || client.majalisRoomId !== roomId) continue;
+      if (isRoomHost(roomRow, client.userId, client.userRole)) continue;
+
+      if (!settings.allowMic && !client.micMuted) {
+        client.micMuted = true;
+        sendJsonSafe(client.ws, {
+          type: 'majalis:force_mute',
+          roomId,
+          reason: 'أوقف المضيف صلاحية التحدث بالميكروفون.',
+        });
+      }
+      if (!settings.allowCam && !client.camOff) {
+        client.camOff = true;
+        if (client.majalisMode === 'media') {
+          client.majalisMode = 'audio';
+        }
+        sendJsonSafe(client.ws, {
+          type: 'majalis:force_cam_off',
+          roomId,
+          reason: 'أوقف المضيف صلاحية تشغيل الكاميرا.',
+        });
+      }
+      if (!settings.allowScreenShare && client.screenSharing) {
+        client.screenSharing = false;
+        sendJsonSafe(client.ws, {
+          type: 'majalis:force_stop_share',
+          roomId,
+          reason: 'أوقف المضيف صلاحية مشاركة الشاشة.',
+        });
+      }
+    }
+
+    for (const client of clients) {
+      if (client.inMajalis && client.majalisRoomId === roomId) {
+        sendJsonSafe(client.ws, {
+          type: 'majalis:settings_updated',
+          roomId,
+          settings,
+        });
+      }
+    }
+
+    broadcastRoomState(roomId);
+    broadcastLobbyState();
+  }
+
+  function endMeetingForAllInternal(roomId: string, actorName: string): void {
+    roomKnocks.delete(roomId);
+    roomAdmittedUsers.delete(roomId);
+    roomSpotlights.delete(roomId);
+
+    for (const client of clients) {
+      if (client.inMajalis && client.majalisRoomId === roomId) {
+        client.inMajalis = false;
+        client.majalisRoomId = null;
+        client.screenSharing = false;
+        client.handRaised = false;
+        sendJsonSafe(client.ws, {
+          type: 'majalis:ended',
+          roomId,
+          byName: actorName,
+          message: `تم إنهاء المجلس للجميع بواسطة ${actorName}.`,
+        });
+      }
+    }
+    broadcastLobbyState();
   }
 
   function leaveCurrentMajalisRoom(meta: ClientMeta): void {
@@ -311,6 +481,9 @@ export function setupWebSocketHub(
       (c) => c.inMajalis && c.majalisRoomId === leftRoomId && c.userId === meta.userId
     );
     if (!stillInRoomSameUser) {
+      if (roomSpotlights.get(leftRoomId) === meta.userId) {
+        roomSpotlights.set(leftRoomId, null);
+      }
       for (const client of clients) {
         if (client.inMajalis && client.majalisRoomId === leftRoomId && client.userId !== meta.userId) {
           sendJsonSafe(client.ws, {
@@ -406,7 +579,9 @@ export function setupWebSocketHub(
           camOff?: boolean;
           screenSharing?: boolean;
           handRaised?: boolean;
-          action?: 'start' | 'pause' | 'reset' | 'preset';
+          approve?: boolean;
+          emoji?: string;
+          action?: string;
           phase?: MajalisTimerPhase;
           body?: string;
           signal?: unknown;
@@ -419,7 +594,7 @@ export function setupWebSocketHub(
           | {
               display_name: string;
               avatar_asset_id: string | null;
-              role: string;
+              role: UserRole;
               approval_status: string;
             }
           | undefined;
@@ -443,6 +618,7 @@ export function setupWebSocketHub(
         }
         meta.displayName = userRow.display_name;
         meta.avatarAssetId = userRow.avatar_asset_id;
+        meta.userRole = userRow.role;
 
         if (msg.type === 'typing' && msg.channel) {
           if (msg.channel === 'announcements' && userRow.role === 'member') return;
@@ -472,35 +648,97 @@ export function setupWebSocketHub(
           return;
         }
 
-        // Majalis Multi-Room Join, Presence, WebRTC Signaling, Timer & Chat
+        // Majalis Multi-Room Join, Knock Queue, Host Controls, WebRTC Signaling, Timer & Chat
         if (msg.type === 'majalis:join') {
           let targetRoomId = String(msg.roomId || '').trim();
-          if (targetRoomId) {
-            const exists = db.prepare('SELECT 1 FROM majalis_rooms WHERE id = ?').get(targetRoomId);
-            if (!exists) targetRoomId = '';
-          }
-          if (!targetRoomId) {
+          let roomRow = targetRoomId ? getRoomRow(targetRoomId) : undefined;
+          if (!roomRow) {
             const fallbackRoom = db
               .prepare('SELECT id FROM majalis_rooms ORDER BY is_default DESC, created_at ASC LIMIT 1')
               .get() as { id: string } | undefined;
             if (!fallbackRoom) return;
             targetRoomId = fallbackRoom.id;
+            roomRow = getRoomRow(targetRoomId);
+          }
+          if (!roomRow) return;
+
+          const settings = mapRoomSettings(roomRow);
+          const host = isRoomHost(roomRow, meta.userId, meta.userRole);
+          const mode: MajalisParticipationMode =
+            msg.mode === 'media' || msg.mode === 'audio' || msg.mode === 'listener'
+              ? msg.mode
+              : 'listener';
+
+          // Google Meet Room Lock check
+          if (settings.roomLocked && !host) {
+            sendJsonSafe(ws, {
+              type: 'majalis:join_rejected',
+              roomId: targetRoomId,
+              reason: 'locked',
+              message: 'المجلس مقفول حالياً من قِبل المضيف.',
+            });
+            return;
+          }
+
+          // Google Meet Knock / Waiting Queue check
+          if (
+            settings.accessType === 'knock' &&
+            !host &&
+            !roomAdmittedUsers.get(targetRoomId)?.has(meta.userId)
+          ) {
+            let queueMap = roomKnocks.get(targetRoomId);
+            if (!queueMap) {
+              queueMap = new Map();
+              roomKnocks.set(targetRoomId, queueMap);
+            }
+            queueMap.set(meta.userId, {
+              userId: meta.userId,
+              displayName: meta.displayName,
+              avatarAssetId: meta.avatarAssetId,
+              mode,
+              requestedAt: now,
+            });
+            sendJsonSafe(ws, {
+              type: 'majalis:knock_pending',
+              roomId: targetRoomId,
+            });
+            broadcastKnockQueue(targetRoomId);
+            return;
           }
 
           if (meta.inMajalis && meta.majalisRoomId !== targetRoomId) {
             leaveCurrentMajalisRoom(meta);
           }
 
-          const mode: MajalisParticipationMode =
-            msg.mode === 'media' || msg.mode === 'audio' || msg.mode === 'listener'
-              ? msg.mode
-              : 'listener';
+          // Remove from knock queue if somehow still there
+          roomKnocks.get(targetRoomId)?.delete(meta.userId);
+
+          let effectiveMicMuted =
+            typeof msg.micMuted === 'boolean' ? msg.micMuted : mode === 'listener';
+          let effectiveCamOff =
+            typeof msg.camOff === 'boolean' ? msg.camOff : mode !== 'media';
+          let effectiveMode = mode;
+
+          if (!host) {
+            if (settings.muteOnEntry || !settings.allowMic) {
+              effectiveMicMuted = true;
+            }
+            if (!settings.allowCam) {
+              effectiveCamOff = true;
+              if (effectiveMode === 'media') {
+                effectiveMode = 'audio';
+              }
+            }
+            if (!settings.allowMic && !settings.allowCam) {
+              effectiveMode = 'listener';
+            }
+          }
 
           meta.inMajalis = true;
           meta.majalisRoomId = targetRoomId;
-          meta.majalisMode = mode;
-          meta.micMuted = typeof msg.micMuted === 'boolean' ? msg.micMuted : mode === 'listener';
-          meta.camOff = typeof msg.camOff === 'boolean' ? msg.camOff : mode !== 'media';
+          meta.majalisMode = effectiveMode;
+          meta.micMuted = effectiveMicMuted;
+          meta.camOff = effectiveCamOff;
           meta.screenSharing = false;
           meta.handRaised = false;
           meta.majalisJoinedAt = now;
@@ -514,6 +752,11 @@ export function setupWebSocketHub(
             roomId: targetRoomId,
             peers,
             timer: resolveEffectiveTimer(targetRoomId),
+            settings,
+            spotlightUserId: roomSpotlights.get(targetRoomId) ?? null,
+            knockQueue: host ? getKnockQueue(targetRoomId) : [],
+            enforcedMicMuted: !host && (settings.muteOnEntry || !settings.allowMic),
+            enforcedCamOff: !host && !settings.allowCam,
           });
 
           const selfInfo: MajalisParticipantInfo = {
@@ -545,18 +788,101 @@ export function setupWebSocketHub(
           return;
         }
 
+        if (msg.type === 'majalis:knock_cancel' && msg.roomId) {
+          const rId = String(msg.roomId);
+          roomKnocks.get(rId)?.delete(meta.userId);
+          broadcastKnockQueue(rId);
+          return;
+        }
+
+        if (msg.type === 'majalis:knock_decide' && msg.roomId && msg.targetUserId) {
+          const rId = String(msg.roomId);
+          const roomRow = getRoomRow(rId);
+          if (!roomRow || !isRoomHost(roomRow, meta.userId, meta.userRole)) return;
+
+          const targetId = String(msg.targetUserId);
+          roomKnocks.get(rId)?.delete(targetId);
+
+          if (msg.approve) {
+            let admitted = roomAdmittedUsers.get(rId);
+            if (!admitted) {
+              admitted = new Set();
+              roomAdmittedUsers.set(rId, admitted);
+            }
+            admitted.add(targetId);
+            for (const client of clients) {
+              if (client.userId === targetId) {
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:knock_admitted',
+                  roomId: rId,
+                });
+              }
+            }
+          } else {
+            for (const client of clients) {
+              if (client.userId === targetId) {
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:join_rejected',
+                  roomId: rId,
+                  reason: 'denied',
+                  message: 'لم يوافق المضيف على طلب الانضمام للمجلس.',
+                });
+              }
+            }
+          }
+          broadcastKnockQueue(rId);
+          return;
+        }
+
         if (msg.type === 'majalis:leave') {
           leaveCurrentMajalisRoom(meta);
           return;
         }
 
         if (msg.type === 'majalis:state' && meta.inMajalis && meta.majalisRoomId) {
+          const roomRow = getRoomRow(meta.majalisRoomId);
+          const settings = roomRow ? mapRoomSettings(roomRow) : null;
+          const host = roomRow ? isRoomHost(roomRow, meta.userId, meta.userRole) : false;
+
           if (msg.mode === 'media' || msg.mode === 'audio' || msg.mode === 'listener') {
             meta.majalisMode = msg.mode;
           }
-          if (typeof msg.micMuted === 'boolean') meta.micMuted = msg.micMuted;
-          if (typeof msg.camOff === 'boolean') meta.camOff = msg.camOff;
-          if (typeof msg.screenSharing === 'boolean') meta.screenSharing = msg.screenSharing;
+          if (typeof msg.micMuted === 'boolean') {
+            if (!host && settings && !settings.allowMic && msg.micMuted === false) {
+              meta.micMuted = true;
+              sendJsonSafe(ws, {
+                type: 'majalis:force_mute',
+                roomId: meta.majalisRoomId,
+                reason: 'الميكروفون معطّل للمشاركين من إعدادات المضيف.',
+              });
+            } else {
+              meta.micMuted = msg.micMuted;
+            }
+          }
+          if (typeof msg.camOff === 'boolean') {
+            if (!host && settings && !settings.allowCam && msg.camOff === false) {
+              meta.camOff = true;
+              sendJsonSafe(ws, {
+                type: 'majalis:force_cam_off',
+                roomId: meta.majalisRoomId,
+                reason: 'الكاميرا معطّلة للمشاركين من إعدادات المضيف.',
+              });
+            } else {
+              meta.camOff = msg.camOff;
+            }
+          }
+          if (typeof msg.screenSharing === 'boolean') {
+            if (!host && settings && !settings.allowScreenShare && msg.screenSharing === true) {
+              meta.screenSharing = false;
+              sendJsonSafe(ws, {
+                type: 'majalis:force_stop_share',
+                roomId: meta.majalisRoomId,
+                reason: 'مشاركة الشاشة معطّلة من إعدادات المضيف.',
+              });
+            } else {
+              meta.screenSharing = msg.screenSharing;
+            }
+          }
           if (typeof msg.handRaised === 'boolean') meta.handRaised = msg.handRaised;
 
           broadcastRoomState(meta.majalisRoomId);
@@ -564,12 +890,153 @@ export function setupWebSocketHub(
           return;
         }
 
+        if (msg.type === 'majalis:host_action' && meta.inMajalis && meta.majalisRoomId && msg.action) {
+          const rId = meta.majalisRoomId;
+          const roomRow = getRoomRow(rId);
+          if (!roomRow || !isRoomHost(roomRow, meta.userId, meta.userRole)) return;
+
+          if (msg.action === 'mute_all') {
+            for (const client of clients) {
+              if (
+                client.inMajalis &&
+                client.majalisRoomId === rId &&
+                !isRoomHost(roomRow, client.userId, client.userRole)
+              ) {
+                client.micMuted = true;
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:force_mute',
+                  roomId: rId,
+                  reason: `قام ${meta.displayName} بكتم صوت الجميع.`,
+                });
+              }
+            }
+            broadcastRoomState(rId);
+            broadcastLobbyState();
+            return;
+          }
+
+          if (msg.action === 'mute_user' && msg.targetUserId) {
+            const targetId = String(msg.targetUserId);
+            for (const client of clients) {
+              if (client.inMajalis && client.majalisRoomId === rId && client.userId === targetId) {
+                client.micMuted = true;
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:force_mute',
+                  roomId: rId,
+                  reason: `قام ${meta.displayName} بكتم الميكروفون لديك.`,
+                });
+              }
+            }
+            broadcastRoomState(rId);
+            broadcastLobbyState();
+            return;
+          }
+
+          if (msg.action === 'lower_all_hands') {
+            for (const client of clients) {
+              if (client.inMajalis && client.majalisRoomId === rId) {
+                client.handRaised = false;
+              }
+            }
+            broadcastRoomState(rId);
+            return;
+          }
+
+          if (msg.action === 'spotlight_user') {
+            const nextSpot = msg.targetUserId ? String(msg.targetUserId) : null;
+            roomSpotlights.set(rId, nextSpot);
+            broadcastRoomState(rId);
+            broadcastLobbyState();
+            return;
+          }
+
+          if (msg.action === 'kick_user' && msg.targetUserId) {
+            const targetId = String(msg.targetUserId);
+            if (targetId === meta.userId) return;
+            roomAdmittedUsers.get(rId)?.delete(targetId);
+            roomKnocks.get(rId)?.delete(targetId);
+            for (const client of clients) {
+              if (client.inMajalis && client.majalisRoomId === rId && client.userId === targetId) {
+                client.inMajalis = false;
+                client.majalisRoomId = null;
+                client.screenSharing = false;
+                client.handRaised = false;
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:kicked',
+                  roomId: rId,
+                  message: `تم إبعادك من المجلس بواسطة ${meta.displayName}.`,
+                });
+              } else if (client.inMajalis && client.majalisRoomId === rId && client.userId !== targetId) {
+                sendJsonSafe(client.ws, {
+                  type: 'majalis:peer_left',
+                  roomId: rId,
+                  userId: targetId,
+                });
+              }
+            }
+            if (roomSpotlights.get(rId) === targetId) {
+              roomSpotlights.set(rId, null);
+            }
+            broadcastRoomState(rId);
+            broadcastLobbyState();
+            return;
+          }
+
+          if (msg.action === 'end_meeting') {
+            endMeetingForAllInternal(rId, meta.displayName);
+            return;
+          }
+        }
+
+        if (msg.type === 'majalis:reaction' && meta.inMajalis && meta.majalisRoomId && msg.emoji) {
+          const emoji = String(msg.emoji).trim();
+          if (!ALLOWED_MEETING_REACTIONS.has(emoji)) return;
+          const ev: MajalisReactionEvent = {
+            id: `mrx_${randomUUID().slice(0, 8)}`,
+            userId: meta.userId,
+            displayName: meta.displayName,
+            emoji,
+            createdAt: now,
+          };
+          for (const client of clients) {
+            if (client.inMajalis && client.majalisRoomId === meta.majalisRoomId) {
+              sendJsonSafe(client.ws, {
+                type: 'majalis:reaction',
+                roomId: meta.majalisRoomId,
+                reaction: ev,
+              });
+            }
+          }
+          return;
+        }
+
         if (msg.type === 'majalis:timer' && meta.inMajalis && meta.majalisRoomId && msg.action) {
-          controlRoomTimer(meta.majalisRoomId, meta.displayName, msg.action, msg.phase);
+          if (
+            msg.action === 'start' ||
+            msg.action === 'pause' ||
+            msg.action === 'reset' ||
+            msg.action === 'preset'
+          ) {
+            controlRoomTimer(meta.majalisRoomId, meta.displayName, msg.action, msg.phase);
+          }
           return;
         }
 
         if (msg.type === 'majalis:chat' && meta.inMajalis && meta.majalisRoomId) {
+          const roomRow = getRoomRow(meta.majalisRoomId);
+          if (roomRow) {
+            const settings = mapRoomSettings(roomRow);
+            const host = isRoomHost(roomRow, meta.userId, meta.userRole);
+            if (!host && !settings.allowChat) {
+              sendJsonSafe(ws, {
+                type: 'majalis:error',
+                roomId: meta.majalisRoomId,
+                message: 'تم إيقاف الدردشة في هذا المجلس من قِبل المضيف.',
+              });
+              return;
+            }
+          }
+
           const text = String(msg.body || '').trim();
           if (!text || text.length > 500) return;
 
@@ -636,6 +1103,14 @@ export function setupWebSocketHub(
       const prevRoomId = meta.majalisRoomId;
       clients.delete(meta);
       if (isClosed) return;
+
+      // Clean any pending knock requests from this disconnected user
+      for (const [rId, queueMap] of roomKnocks.entries()) {
+        if (queueMap.delete(meta.userId)) {
+          broadcastKnockQueue(rId);
+        }
+      }
+
       if (wasInMajalis && prevRoomId) {
         meta.inMajalis = false;
         meta.majalisRoomId = null;
@@ -643,6 +1118,9 @@ export function setupWebSocketHub(
           (c) => c.inMajalis && c.majalisRoomId === prevRoomId && c.userId === meta.userId
         );
         if (!stillInRoomSameUser) {
+          if (roomSpotlights.get(prevRoomId) === meta.userId) {
+            roomSpotlights.set(prevRoomId, null);
+          }
           for (const client of clients) {
             if (client.inMajalis && client.majalisRoomId === prevRoomId && client.userId !== meta.userId) {
               sendJsonSafe(client.ws, {
@@ -776,6 +1254,12 @@ export function setupWebSocketHub(
     },
     broadcastMajalisLobbyUpdated() {
       broadcastLobbyState();
+    },
+    applyMajalisRoomSettings(roomId, settings) {
+      enforceSettingsOnRoomParticipants(roomId, settings);
+    },
+    endMajalisMeetingForAll(roomId, actorName) {
+      endMeetingForAllInternal(roomId, actorName);
     },
     broadcastMajalisRoomChat(roomId, message) {
       for (const client of clients) {

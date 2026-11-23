@@ -14,6 +14,7 @@ import {
   bioSchema,
   displayNameSchema,
   emailSchema,
+  isSafeHttpUrl,
   normalizeUsername,
   passwordSchema,
   usernameSchema,
@@ -69,12 +70,48 @@ export function createAuthRouter(
   router.get('/config', (_req, res) => {
     const subtitle = getSetting(db, 'institution_subtitle', config.institutionSubtitle);
     const chatLocked = getSetting(db, 'chat_locked', 'false') === 'true';
-    const meetingExternalUrl = getSetting(db, 'meeting_provider_url', config.meetingProviderUrl);
-    const meetingMode = meetingExternalUrl
-      ? 'external'
-      : getSetting(db, 'meeting_mode', 'builtin') === 'unconfigured'
-      ? 'unconfigured'
-      : 'builtin';
+    const rawExternalUrl = getSetting(db, 'meeting_provider_url', config.meetingProviderUrl).trim();
+    const safeExternalUrl = rawExternalUrl && isSafeHttpUrl(rawExternalUrl) ? rawExternalUrl : '';
+    const storedMeetingMode = getSetting(db, 'meeting_mode', '').trim();
+    const meetingMode: 'builtin' | 'external' | 'unconfigured' =
+      storedMeetingMode === 'builtin'
+        ? 'builtin'
+        : storedMeetingMode === 'unconfigured'
+        ? 'unconfigured'
+        : storedMeetingMode === 'external'
+        ? safeExternalUrl
+          ? 'external'
+          : 'builtin'
+        : safeExternalUrl
+        ? 'external'
+        : 'builtin';
+    const meetingExternalUrl = meetingMode === 'external' ? safeExternalUrl : '';
+    const defaultRoomAccessType =
+      getSetting(db, 'default_room_access_type', 'open') === 'knock' ? 'knock' : 'open';
+
+    let iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }> = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ];
+    const rawIce = getSetting(db, 'ice_servers_json', '').trim();
+    if (rawIce) {
+      try {
+        const parsed = JSON.parse(rawIce);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const valid = parsed.filter(
+            (item) =>
+              item &&
+              typeof item === 'object' &&
+              (typeof item.urls === 'string' || Array.isArray(item.urls))
+          );
+          if (valid.length > 0) {
+            iceServers = valid;
+          }
+        }
+      } catch {
+        // Fallback to default STUN servers
+      }
+    }
 
     res.json({
       brandName: 'رَحّالَة',
@@ -83,6 +120,8 @@ export function createAuthRouter(
       chatLocked,
       meetingMode,
       meetingExternalUrl,
+      defaultRoomAccessType,
+      iceServers,
       emailRecoveryEnabled: false,
       previewDemoEnabled: config.previewDemoEnabled && !config.isProduction,
     });

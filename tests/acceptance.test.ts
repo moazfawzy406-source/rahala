@@ -1091,6 +1091,199 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
       ownerWs.close();
     });
   });
+
+  it('L: Google Meet-style Majlis settings, knock/admit waiting queue, room lock, mute-all, kick, end-for-all, and ICE config', async () => {
+    const owner = new TestClient(baseUrl);
+    const member = new TestClient(baseUrl);
+    const guest2 = new TestClient(baseUrl);
+
+    ctx.db
+      .prepare(
+        `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, created_at, updated_at)
+         VALUES ('usr_gm1', 'طالب أول', 'gm_one', 'gm1@example.invalid', ?, 'member', 'approved', 0, '', ?, ?)`
+      )
+      .run(hashPassword('GmPass123'), Date.now(), Date.now());
+    ctx.db
+      .prepare(
+        `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, created_at, updated_at)
+         VALUES ('usr_gm2', 'طالب ثان', 'gm_two', 'gm2@example.invalid', ?, 'member', 'approved', 0, '', ?, ?)`
+      )
+      .run(hashPassword('GmPass123'), Date.now(), Date.now());
+
+    await owner.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'owner_one', password: 'OwnerPass123' }),
+    });
+    await member.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'gm_one', password: 'GmPass123' }),
+    });
+    await guest2.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'gm_two', password: 'GmPass123' }),
+    });
+
+    // 1. Admin configures defaultRoomAccessType & custom TURN ICE server in /api/admin/settings
+    // Also verify invalid/non-URL meeting_provider_url never breaks builtin mode, and toggling external <-> builtin works cleanly
+    ctx.db
+      .prepare(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES ('meeting_provider_url', 'moazfawzy200-6', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      )
+      .run(Date.now());
+    const cfgWithInvalidUrl = await member.json('/api/config');
+    expect(cfgWithInvalidUrl.data.meetingMode).toBe('builtin');
+    expect(cfgWithInvalidUrl.data.meetingExternalUrl).toBe('');
+
+    const setExt = await owner.json('/api/admin/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        meetingMode: 'external',
+        meetingProviderUrl: 'https://meet.google.com/abc-defg-hij',
+      }),
+    });
+    expect(setExt.status).toBe(200);
+    expect((await member.json('/api/config')).data.meetingMode).toBe('external');
+
+    const adminCfg = await owner.json('/api/admin/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        meetingMode: 'builtin',
+        defaultRoomAccessType: 'knock',
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'turn:relay.example.org:3478', username: 'u1', credential: 'p1' },
+        ],
+      }),
+    });
+    expect(adminCfg.status).toBe(200);
+    const pubCfg = await member.json('/api/config');
+    expect(pubCfg.data.meetingMode).toBe('builtin');
+    expect(pubCfg.data.meetingExternalUrl).toBe('');
+    expect(pubCfg.data.defaultRoomAccessType).toBe('knock');
+    expect(pubCfg.data.iceServers).toHaveLength(2);
+
+    // 2. Owner creates a Google Meet-style room (knock mode, chat disabled for members, muteOnEntry)
+    const createdRoom = await owner.json('/api/majalis/rooms', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'مجلس بضوابط جوجل ميت',
+        accessType: 'knock',
+        allowScreenShare: false,
+        allowChat: false,
+        muteOnEntry: true,
+      }),
+    });
+    expect(createdRoom.status).toBe(201);
+    const roomId = createdRoom.data.room.id;
+    expect(createdRoom.data.room.settings.accessType).toBe('knock');
+    expect(createdRoom.data.room.settings.allowChat).toBe(false);
+
+    // Non-host cannot modify room settings
+    expect(
+      (
+        await member.json(`/api/majalis/rooms/${roomId}/settings`, {
+          method: 'PATCH',
+          body: JSON.stringify({ allowChat: true }),
+        })
+      ).status
+    ).toBe(403);
+
+    // Non-host cannot chat while allowChat=false
+    expect(
+      (
+        await member.json(`/api/majalis/rooms/${roomId}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({ body: 'رسالة ممنوعة' }),
+        })
+      ).status
+    ).toBe(403);
+
+    // 3. Connect WS clients for owner, member, guest2
+    const wsBase = baseUrl.replace('http://', 'ws://');
+    const [tOwner, tMem, tG2] = await Promise.all([
+      owner.json('/api/auth/ws-ticket'),
+      member.json('/api/auth/ws-ticket'),
+      guest2.json('/api/auth/ws-ticket'),
+    ]);
+    const ownerWs = new WebSocket(`${wsBase}/ws?ticket=${encodeURIComponent(tOwner.data.ticket)}`);
+    const memWs = new WebSocket(`${wsBase}/ws?ticket=${encodeURIComponent(tMem.data.ticket)}`);
+    const g2Ws = new WebSocket(`${wsBase}/ws?ticket=${encodeURIComponent(tG2.data.ticket)}`);
+
+    const waitForMsg = (ws: WebSocket, predicate: (m: any) => boolean) =>
+      new Promise<any>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WS timeout')), 3000);
+        const handler = (raw: WebSocket.RawData) => {
+          const parsed = JSON.parse(raw.toString());
+          if (predicate(parsed)) {
+            clearTimeout(timeout);
+            ws.off('message', handler);
+            resolve(parsed);
+          }
+        };
+        ws.on('message', handler);
+      });
+
+    await Promise.all([
+      waitForMsg(ownerWs, (m) => m.type === 'connected'),
+      waitForMsg(memWs, (m) => m.type === 'connected'),
+      waitForMsg(g2Ws, (m) => m.type === 'connected'),
+    ]);
+
+    // Owner joins host room directly without knocking
+    const ownerPeersP = waitForMsg(ownerWs, (m) => m.type === 'majalis:peers');
+    ownerWs.send(JSON.stringify({ type: 'majalis:join', roomId, mode: 'audio', micMuted: false, camOff: true }));
+    await ownerPeersP;
+
+    // Member knocks -> gets knock_pending & host gets knock_queue
+    const memPendingP = waitForMsg(memWs, (m) => m.type === 'majalis:knock_pending' && m.roomId === roomId);
+    const hostQueueP = waitForMsg(ownerWs, (m) => m.type === 'majalis:knock_queue' && m.queue.length === 1);
+    memWs.send(JSON.stringify({ type: 'majalis:join', roomId, mode: 'audio', micMuted: false, camOff: true }));
+    const [, queueEv] = await Promise.all([memPendingP, hostQueueP]);
+    expect(queueEv.queue[0].userId).toBe('usr_gm1');
+
+    // Host admits member -> member receives majalis:knock_admitted -> joins & gets muted on entry
+    const memAdmittedP = waitForMsg(memWs, (m) => m.type === 'majalis:knock_admitted' && m.roomId === roomId);
+    ownerWs.send(JSON.stringify({ type: 'majalis:knock_decide', roomId, targetUserId: 'usr_gm1', approve: true }));
+    await memAdmittedP;
+
+    const memPeersP = waitForMsg(memWs, (m) => m.type === 'majalis:peers' && m.roomId === roomId);
+    memWs.send(JSON.stringify({ type: 'majalis:join', roomId, mode: 'audio', micMuted: false, camOff: true }));
+    const memPeers = await memPeersP;
+    expect(memPeers.enforcedMicMuted).toBe(true);
+
+    // Lock room -> guest2 gets rejected with reason: 'locked'
+    const lockRes = await owner.json(`/api/majalis/rooms/${roomId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify({ roomLocked: true }),
+    });
+    expect(lockRes.status).toBe(200);
+    expect(lockRes.data.settings.roomLocked).toBe(true);
+
+    const g2RejectedP = waitForMsg(g2Ws, (m) => m.type === 'majalis:join_rejected' && m.reason === 'locked');
+    g2Ws.send(JSON.stringify({ type: 'majalis:join', roomId, mode: 'listener' }));
+    await g2RejectedP;
+
+    // Host executes mute_all -> member receives majalis:force_mute
+    const forceMuteP = waitForMsg(memWs, (m) => m.type === 'majalis:force_mute');
+    ownerWs.send(JSON.stringify({ type: 'majalis:host_action', roomId, action: 'mute_all' }));
+    await forceMuteP;
+
+    // Host kicks member -> member receives majalis:kicked
+    const kickedP = waitForMsg(memWs, (m) => m.type === 'majalis:kicked');
+    ownerWs.send(JSON.stringify({ type: 'majalis:host_action', roomId, action: 'kick_user', targetUserId: 'usr_gm1' }));
+    await kickedP;
+
+    // End meeting for everyone endpoint works for host
+    const ownerEndedP = waitForMsg(ownerWs, (m) => m.type === 'majalis:ended' && m.roomId === roomId);
+    expect((await owner.json(`/api/majalis/rooms/${roomId}/end`, { method: 'POST' })).status).toBe(200);
+    await ownerEndedP;
+
+    await Promise.all([
+      new Promise<void>((r) => { ownerWs.once('close', () => r()); ownerWs.close(); }),
+      new Promise<void>((r) => { memWs.once('close', () => r()); memWs.close(); }),
+      new Promise<void>((r) => { g2Ws.once('close', () => r()); g2Ws.close(); }),
+    ]);
+  });
 });
 
 

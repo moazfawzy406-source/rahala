@@ -198,6 +198,15 @@ export interface PendingUserRecord {
   createdAt: number;
 }
 
+export interface IceServerEntry {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+export type MajalisAccessType = 'open' | 'knock';
+export type MajalisLayoutMode = 'spotlight' | 'grid';
+
 export interface AppPublicConfig {
   brandName: string;
   tagline: string;
@@ -205,6 +214,8 @@ export interface AppPublicConfig {
   chatLocked: boolean;
   meetingMode: 'builtin' | 'external' | 'unconfigured';
   meetingExternalUrl: string;
+  defaultRoomAccessType: MajalisAccessType;
+  iceServers: IceServerEntry[];
   emailRecoveryEnabled: boolean;
   previewDemoEnabled: boolean;
 }
@@ -348,6 +359,32 @@ export interface MajalisTimerState {
   updatedByName: string | null;
 }
 
+export interface MajalisRoomSettings {
+  accessType: MajalisAccessType;
+  roomLocked: boolean;
+  allowMic: boolean;
+  allowCam: boolean;
+  allowScreenShare: boolean;
+  allowChat: boolean;
+  muteOnEntry: boolean;
+}
+
+export interface MajalisKnockRequest {
+  userId: string;
+  displayName: string;
+  avatarAssetId: string | null;
+  mode: MajalisParticipationMode;
+  requestedAt: number;
+}
+
+export interface MajalisReactionEvent {
+  id: string;
+  userId: string;
+  displayName: string;
+  emoji: string;
+  createdAt: number;
+}
+
 export interface MajalisRoomSummary {
   id: string;
   title: string;
@@ -361,6 +398,8 @@ export interface MajalisRoomSummary {
   activeCount: number;
   participants: MajalisParticipantInfo[];
   timer: MajalisTimerState;
+  settings: MajalisRoomSettings;
+  spotlightUserId: string | null;
 }
 
 export interface MajalisChatMessageRecord {

@@ -65,8 +65,36 @@ export function AdminView({
     config.meetingMode
   );
   const [meetingUrl, setMeetingUrl] = useState(config.meetingExternalUrl);
+  const [defaultRoomAccess, setDefaultRoomAccess] = useState<'open' | 'knock'>(
+    config.defaultRoomAccessType || 'open'
+  );
+  const existingTurn = config.iceServers?.find((s) => {
+    const first = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+    return typeof first === 'string' && /^turns?:/i.test(first);
+  });
+  const [turnUrl, setTurnUrl] = useState(
+    existingTurn ? (Array.isArray(existingTurn.urls) ? existingTurn.urls[0] : existingTurn.urls) : ''
+  );
+  const [turnUsername, setTurnUsername] = useState(existingTurn?.username || '');
+  const [turnCredential, setTurnCredential] = useState(existingTurn?.credential || '');
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
+
+  useEffect(() => {
+    setInstSubtitle(config.institutionSubtitle);
+    setMeetingMode(config.meetingMode);
+    setMeetingUrl(config.meetingExternalUrl);
+    setDefaultRoomAccess(config.defaultRoomAccessType || 'open');
+    const turnEntry = config.iceServers?.find((s) => {
+      const first = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+      return typeof first === 'string' && /^turns?:/i.test(first);
+    });
+    setTurnUrl(
+      turnEntry ? (Array.isArray(turnEntry.urls) ? turnEntry.urls[0] : turnEntry.urls) : ''
+    );
+    setTurnUsername(turnEntry?.username || '');
+    setTurnCredential(turnEntry?.credential || '');
+  }, [config]);
 
   const loadRequests = useCallback(async () => {
     setReqLoading(true);
@@ -235,16 +263,32 @@ export function AdminView({
     e.preventDefault();
     setSettingsBusy(true);
     try {
+      const iceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        ...(turnUrl.trim()
+          ? [
+              {
+                urls: turnUrl.trim(),
+                ...(turnUsername.trim() ? { username: turnUsername.trim() } : {}),
+                ...(turnCredential.trim() ? { credential: turnCredential.trim() } : {}),
+              },
+            ]
+          : []),
+      ];
+
       await apiRequest('/api/admin/settings', {
         method: 'PATCH',
         body: {
           institutionSubtitle: instSubtitle,
           meetingMode,
-          meetingProviderUrl: meetingUrl,
+          meetingProviderUrl: meetingMode === 'external' ? meetingUrl : '',
+          defaultRoomAccessType: defaultRoomAccess,
+          iceServers,
         },
       });
       onConfigUpdated();
-      onToast('تم حفظ إعدادات المنصة');
+      onToast('تم حفظ إعدادات المنصة ومجلس المذاكرة');
     } catch (err) {
       onToast(err instanceof ApiError ? err.message : 'تعذر حفظ الإعدادات', true);
     } finally {
@@ -674,11 +718,65 @@ export function AdminView({
               onChange={(e) => setMeetingMode(e.target.value as typeof meetingMode)}
               className="rahhala-input w-full px-3 py-2"
             >
-              <option value="builtin">غرفة صوت وصورة مدمجة (WebRTC محلي)</option>
-              <option value="external">مزود اجتماعات خارجي مخصص</option>
+              <option value="builtin">مجلس مدمج حقيقي (غرفة تحضير، صوت، فيديو، شاشة، وضوابط مضيف)</option>
+              <option value="external">مزود اجتماعات خارجي مخصص (مثل Google Meet أو Jitsi)</option>
               <option value="unconfigured">غير مُعَد / معطّل مؤقتًا</option>
             </select>
           </div>
+
+          {meetingMode === 'builtin' && (
+            <div className="space-y-3.5 p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--divider)]">
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1">
+                  سياسة الدخول الافتراضية للمجالس الجديدة
+                </label>
+                <select
+                  value={defaultRoomAccess}
+                  onChange={(e) => setDefaultRoomAccess(e.target.value as 'open' | 'knock')}
+                  className="rahhala-input w-full px-3 py-2"
+                >
+                  <option value="open">مفتوح — يدخل الطلاب الموثقون مباشرة</option>
+                  <option value="knock">موثوق (قاعة انتظار) — يطلب الطالب الإذن ويقبله المضيف</option>
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-[var(--divider)] space-y-2.5">
+                <div className="text-xs font-bold text-[var(--text-primary)]">
+                  خادم TURN إضافي للشبكات المقيدة (اختياري)
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                  يعمل البث عبر Google STUN تلقائياً. أضف خادم TURN إذا كان الطلاب يتصلون عبر شبكات جامعية أو بيانات هاتف مقيدة.
+                </p>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={turnUrl}
+                  onChange={(e) => setTurnUrl(e.target.value)}
+                  placeholder="turn:global.relay.metered.ca:80"
+                  className="rahhala-input w-full px-3 py-2 text-left text-xs"
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={turnUsername}
+                    onChange={(e) => setTurnUsername(e.target.value)}
+                    placeholder="TURN Username (اختياري)"
+                    className="rahhala-input w-full px-3 py-2 text-left text-xs"
+                  />
+                  <input
+                    type="password"
+                    dir="ltr"
+                    value={turnCredential}
+                    onChange={(e) => setTurnCredential(e.target.value)}
+                    placeholder="TURN Credential (اختياري)"
+                    className="rahhala-input w-full px-3 py-2 text-left text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {meetingMode === 'external' && (
             <div>
               <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1">
@@ -689,7 +787,7 @@ export function AdminView({
                 dir="ltr"
                 value={meetingUrl}
                 onChange={(e) => setMeetingUrl(e.target.value)}
-                placeholder="https://meet.example.org/rahhala-room"
+                placeholder="https://meet.google.com/xxx-xxxx-xxx"
                 className="rahhala-input w-full px-3.5 py-2 text-left"
               />
             </div>

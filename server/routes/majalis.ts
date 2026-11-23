@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { MajalisChatMessageRecord } from '../../shared/types.ts';
+import type { MajalisChatMessageRecord, MajalisRoomSettings } from '../../shared/types.ts';
 import type { RahhalaConfig } from '../config.ts';
-import type { RahhalaDb } from '../db.ts';
+import { getSetting, type RahhalaDb } from '../db.ts';
 import { type AuthenticatedRequest, createAuthMiddleware } from '../middleware/auth.ts';
 import type { RealtimeHub } from '../ws.ts';
 
@@ -27,6 +27,10 @@ export function createMajalisRouter(
       .min(3, 'اكتب اسمًا واضحًا للمجلس (٣ أحرف على الأقل)')
       .max(60, 'اسم المجلس طويل جدًا (بحد أقصى ٦٠ حرفًا)'),
     subjectId: z.string().trim().min(1).max(80).nullable().optional(),
+    accessType: z.enum(['open', 'knock']).optional(),
+    allowScreenShare: z.boolean().optional(),
+    allowChat: z.boolean().optional(),
+    muteOnEntry: z.boolean().optional(),
   });
 
   router.post('/majalis/rooms', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -59,13 +63,21 @@ export function createMajalisRouter(
       resolvedSubjectName = subj.name;
     }
 
+    const defaultAccess =
+      getSetting(db, 'default_room_access_type', 'open') === 'knock' ? 'knock' : 'open';
+    const accessType = parsed.data.accessType ?? defaultAccess;
+    const allowScreenShare = parsed.data.allowScreenShare ?? true;
+    const allowChat = parsed.data.allowChat ?? true;
+    const muteOnEntry = parsed.data.muteOnEntry ?? false;
+
     const id = `room_${randomUUID()}`;
     const now = Date.now();
 
     db.prepare(
       `INSERT INTO majalis_rooms (
-         id, title, subject_id, subject_name_snapshot, creator_id, creator_name_snapshot, is_default, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)`
+         id, title, subject_id, subject_name_snapshot, creator_id, creator_name_snapshot, is_default, created_at,
+         access_type, room_locked, allow_mic, allow_cam, allow_screen_share, allow_chat, mute_on_entry
+       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 1, 1, ?, ?, ?)`
     ).run(
       id,
       parsed.data.title,
@@ -73,12 +85,121 @@ export function createMajalisRouter(
       resolvedSubjectName,
       req.authUser!.id,
       req.authUser!.displayName,
-      now
+      now,
+      accessType,
+      allowScreenShare ? 1 : 0,
+      allowChat ? 1 : 0,
+      muteOnEntry ? 1 : 0
     );
 
     hub.broadcastMajalisLobbyUpdated();
     const room = hub.getMajalisRoomsSnapshot().find((r) => r.id === id);
     res.status(201).json({ room });
+  });
+
+  const updateRoomSettingsSchema = z.object({
+    accessType: z.enum(['open', 'knock']).optional(),
+    roomLocked: z.boolean().optional(),
+    allowMic: z.boolean().optional(),
+    allowCam: z.boolean().optional(),
+    allowScreenShare: z.boolean().optional(),
+    allowChat: z.boolean().optional(),
+    muteOnEntry: z.boolean().optional(),
+  });
+
+  router.patch('/majalis/rooms/:id/settings', requireAuth, (req: AuthenticatedRequest, res) => {
+    const roomId = String(req.params.id || '').trim();
+    const existing = db
+      .prepare(
+        `SELECT id, creator_id, access_type, room_locked, allow_mic, allow_cam, allow_screen_share, allow_chat, mute_on_entry
+         FROM majalis_rooms WHERE id = ?`
+      )
+      .get(roomId) as
+      | {
+          id: string;
+          creator_id: string | null;
+          access_type: 'open' | 'knock';
+          room_locked: number;
+          allow_mic: number;
+          allow_cam: number;
+          allow_screen_share: number;
+          allow_chat: number;
+          mute_on_entry: number;
+        }
+      | undefined;
+
+    if (!existing) {
+      res.status(404).json({ error: 'المجلس غير موجود' });
+      return;
+    }
+
+    const isHost =
+      req.authUser!.role === 'owner' ||
+      req.authUser!.role === 'admin' ||
+      (existing.creator_id !== null && existing.creator_id === req.authUser!.id);
+    if (!isHost) {
+      res.status(403).json({ error: 'إعدادات المجلس متاحة لمضيف المجلس أو المشرفين فقط' });
+      return;
+    }
+
+    const parsed = updateRoomSettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'إعدادات المجلس غير صالحة' });
+      return;
+    }
+
+    const nextSettings: MajalisRoomSettings = {
+      accessType: parsed.data.accessType ?? existing.access_type,
+      roomLocked: parsed.data.roomLocked ?? Boolean(existing.room_locked),
+      allowMic: parsed.data.allowMic ?? Boolean(existing.allow_mic),
+      allowCam: parsed.data.allowCam ?? Boolean(existing.allow_cam),
+      allowScreenShare: parsed.data.allowScreenShare ?? Boolean(existing.allow_screen_share),
+      allowChat: parsed.data.allowChat ?? Boolean(existing.allow_chat),
+      muteOnEntry: parsed.data.muteOnEntry ?? Boolean(existing.mute_on_entry),
+    };
+
+    db.prepare(
+      `UPDATE majalis_rooms
+       SET access_type = ?, room_locked = ?, allow_mic = ?, allow_cam = ?, allow_screen_share = ?, allow_chat = ?, mute_on_entry = ?
+       WHERE id = ?`
+    ).run(
+      nextSettings.accessType,
+      nextSettings.roomLocked ? 1 : 0,
+      nextSettings.allowMic ? 1 : 0,
+      nextSettings.allowCam ? 1 : 0,
+      nextSettings.allowScreenShare ? 1 : 0,
+      nextSettings.allowChat ? 1 : 0,
+      nextSettings.muteOnEntry ? 1 : 0,
+      roomId
+    );
+
+    hub.applyMajalisRoomSettings(roomId, nextSettings);
+    const room = hub.getMajalisRoomsSnapshot().find((r) => r.id === roomId);
+    res.json({ settings: nextSettings, room });
+  });
+
+  router.post('/majalis/rooms/:id/end', requireAuth, (req: AuthenticatedRequest, res) => {
+    const roomId = String(req.params.id || '').trim();
+    const existing = db
+      .prepare('SELECT id, creator_id FROM majalis_rooms WHERE id = ?')
+      .get(roomId) as { id: string; creator_id: string | null } | undefined;
+
+    if (!existing) {
+      res.status(404).json({ error: 'المجلس غير موجود' });
+      return;
+    }
+
+    const isHost =
+      req.authUser!.role === 'owner' ||
+      req.authUser!.role === 'admin' ||
+      (existing.creator_id !== null && existing.creator_id === req.authUser!.id);
+    if (!isHost) {
+      res.status(403).json({ error: 'إنهاء المجلس للجميع متاح للمضيف أو المشرفين فقط' });
+      return;
+    }
+
+    hub.endMajalisMeetingForAll(roomId, req.authUser!.displayName);
+    res.json({ ok: true });
   });
 
   router.delete('/majalis/rooms/:id', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -102,6 +223,7 @@ export function createMajalisRouter(
       return;
     }
 
+    hub.endMajalisMeetingForAll(roomId, req.authUser!.displayName);
     db.prepare('DELETE FROM majalis_rooms WHERE id = ?').run(roomId);
     hub.broadcastMajalisLobbyUpdated();
     res.json({ ok: true });
@@ -156,9 +278,20 @@ export function createMajalisRouter(
 
   router.post('/majalis/rooms/:id/messages', requireAuth, (req: AuthenticatedRequest, res) => {
     const roomId = String(req.params.id || '').trim();
-    const roomExists = db.prepare('SELECT 1 FROM majalis_rooms WHERE id = ?').get(roomId);
-    if (!roomExists) {
+    const roomRow = db
+      .prepare('SELECT id, creator_id, allow_chat FROM majalis_rooms WHERE id = ?')
+      .get(roomId) as { id: string; creator_id: string | null; allow_chat: number } | undefined;
+    if (!roomRow) {
       res.status(404).json({ error: 'المجلس غير موجود' });
+      return;
+    }
+
+    const isHost =
+      req.authUser!.role === 'owner' ||
+      req.authUser!.role === 'admin' ||
+      (roomRow.creator_id !== null && roomRow.creator_id === req.authUser!.id);
+    if (!isHost && !roomRow.allow_chat) {
+      res.status(403).json({ error: 'تم إيقاف الدردشة في هذا المجلس من قِبل المضيف' });
       return;
     }
 
