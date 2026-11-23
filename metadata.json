@@ -1,0 +1,9 @@
+{
+  "name": "رَحّالَة | مركز الدفعة الدراسي",
+  "description": "منصة رَحّالَة لتنظيم المواد الدراسية والمناقشات والإعلانات والأعضاء ومجلس المذاكرة لطلاب الجامعة.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

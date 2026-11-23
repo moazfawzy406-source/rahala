@@ -1,0 +1,369 @@
+RAHHALA | COMPLETE APPLICATION BUILD PROMPT
+
+You are a senior full-stack product engineer and Arabic RTL interface designer. Build a complete, clean, maintainable version of Rahhala (رَحّالَة), an Arabic university class hub. Deliver working application code, not a landing page or a static visual mockup.
+
+This is a fresh implementation specification. Preserve the product behavior below while improving implementation quality, accessibility, reliability and consistency. Do not copy historical bugs or insecure shortcuts. Do not claim a feature works unless its implementation actually works. Use fictional demonstration content only. Do not import real people, messages, accounts, private files, existing infrastructure addresses or credentials.
+
+1. PRODUCT AND LANGUAGE
+
+Rahhala puts study resources, class discussions, announcements, members and a shared study meeting in one place. Primary users are Arabic-speaking university students, with three roles: member, admin and owner.
+
+Use Arabic for every user-facing label, validation message, empty state, confirmation and notification. Use friendly, restrained Egyptian Arabic for helper copy. Keep code identifiers in English. Set document language to Arabic and overall direction to RTL. Explicitly use LTR direction for usernames, email addresses, URLs, filenames and numeric entry when appropriate. Mixed Arabic/Latin text must remain readable.
+
+Brand name: رَحّالَة
+Tagline: كل ما تحتاجه لدراستك في مكان واحد
+Optional configurable institution subtitle: كلية الدعوة الإسلامية - الأزهر الشريف
+Do not fabricate an official institution seal. If no approved logo asset is supplied, use a simple original book mark and the text brand. Make institution branding configurable.
+
+Do not add AI chat, payments, subscriptions, grades, attendance, exam dates, a social feed, private messaging or unrelated features. This is a focused class hub.
+
+2. IMPLEMENTATION EXPECTATIONS
+
+Use a coherent modern full-stack architecture with reusable components, clear state boundaries, typed request/response contracts, persistent storage and server-enforced authorization. React and TypeScript are a suitable default if the environment supports them. Keep the application independent of any particular hosting provider. Choose sensible supported libraries rather than combining several competing UI systems.
+
+Include complete database schema and migrations, input validation, storage interfaces, error handling and tests. Avoid one giant component or route file. Separate auth, resources, chat, members, meetings and administration. Never rely on browser storage as the source of truth for permissions or data. For a local preview without backend services, provide a clearly identified fictional demo adapter with persistent local state and a developer-only role preview, architected so it can be replaced by the real backend. Never present the demo adapter as secure production authentication. Do not expose a role switcher in the normal application.
+
+Do not request or embed actual service secrets in generated files. External integrations must be configurable. A feature requiring an unavailable external service must have an honest setup-needed state, not a fake success toast. Do not connect to an existing live application or perform any deployment.
+
+3. DESIGN SYSTEM
+
+Create a polished, mobile-first Arabic application with a calm dark navy and warm gold identity. Preserve the same visual language across every screen, dialog and state.
+
+Default dark palette:
+- Page background #0C1622
+- Primary card #14263C
+- Secondary card/input surface #1A3049
+- Gold accent #E3B23C
+- Highlight gold #F2CB6B
+- Deep gold #C9962A
+- Primary text #EAF0F6
+- Secondary text #8FA3B8, adjusted when needed for accessible contrast
+- Divider rgba(255,255,255,0.07)
+- Error #E0655F
+- Success #5FBF8F
+- Header/navigation glass rgba(12,22,34,0.92)
+
+Typography: Cairo throughout, with a reliable Arabic sans-serif fallback. Use a clear hierarchy, comfortable Arabic line heights, strong headings and readable helper text. Inputs must remain comfortably readable on phones. Do not shrink essential text to fit.
+
+Use an approximately 4/8/12/18/26 px spacing scale. Rounded cards around 18 px, rounded input fields and pill-like utility controls. Use subtle top highlights, thin warm rims, gentle shadows and restrained translucent glass for elevated surfaces. Gold marks selected navigation, important headings and primary actions. Avoid heavy glow, excessive blur, constant animations or decorative clutter. Respect reduced motion.
+
+Use consistent inline SVG outline icons, approximately 1.8 px stroke, using currentColor. Do not use emoji as functional UI icons because glyphs vary by operating system. Emoji are allowed inside user-authored messages, reactions and the emoji/sticker picker.
+
+Build four complete themes, not a theme toggle that changes only the background:
+- داكن: default navy and gold.
+- فاتح: background #F4F6F9, white cards, pale blue-gray inputs, dark text #1B2733, darker gold accents suitable for white backgrounds.
+- سيبيا: background #F2E9D5, cards #FAF3E1, inputs #F0E4C9, text #40382A, muted brown-gold accents.
+- ليلي دافئ: background #1F1A15, cards #2C251D, inputs #382E24, text #EBDBB2, warm gold.
+
+Ensure text, borders, disabled controls and destructive actions are legible in all four themes. Persist the chosen theme per browser. Theme changes never change permissions or available content.
+
+4. RESPONSIVE APPLICATION SHELL
+
+Mobile: centered app-width content, compact top header, safe-area-aware fixed bottom navigation and a chat composer that sits above navigation and the on-screen keyboard without overlap. Primary navigation labels: المواد، مجالس، المحادثة، الإدارة، حسابي. Hide الإدارة for members. Include visible selected state and unread badges.
+
+Desktop: wider content area, persistent RTL-side navigation and layouts that make good use of screen width. The sidebar must not be treated as a bottom navigation height when positioning the composer. Use a two-column resource grid on small screens where space allows, increasing appropriately on larger screens. Avoid horizontal overflow at 320 px width.
+
+Header: brand, configurable subtitle, theme palette button, compact current-user chip and contextual back control. Clicking the user chip can open account settings. Preserve scroll position and sensible back navigation between home, subject, chat, members and account.
+
+Provide skeleton/loading states, meaningful empty states, inline retry panels, disabled-in-progress buttons and clear success/error feedback. Prevent duplicate submissions. Never convert a loading error into an empty success state.
+
+5. AUTHENTICATION AND APPROVAL
+
+The login identifier is اسم المستخدم, never the display name. Keep display name and username separate throughout the application.
+
+Login screen:
+- اسم المستخدم
+- كلمة المرور
+- دخول
+- أول مرة هنا؟ إنشاء حساب
+- Show/hide password control and proper browser autocomplete attributes.
+
+Registration screen:
+- الاسم بالكامل
+- اسم المستخدم
+- كلمة المرور
+- تأكيد كلمة المرور
+- الإيميل
+- إنشاء حساب
+
+Rules:
+- Display name: required, 2–60 characters; preserve unique display names for this product.
+- Username: required, case-normalized to lowercase; 3–30 characters; only English letters, digits, period and underscore; unique case-insensitively. Explain the rule in Arabic. Do not allow a user to remove their only login identifier.
+- Email: validated and normalized, maximum 120 characters. Collected privately for administration/recovery records, not publicly exposed.
+- Password: minimum 6 characters for compatibility with this product's current rule, maximum 100; allow password managers and encourage a strong password. Confirm the two entries match. Hash passwords securely on the server with a modern salted password hash. Never store or return plaintext passwords.
+- New accounts have role member and approval status pending. Registration does not grant access to the class.
+- Show: حسابك بانتظار موافقة المشرف.
+- Reject login for unapproved accounts and protected application requests until approval.
+- Invalid credentials use a generic Arabic error. Implement bounded, expiring rate limits and a temporary lock after repeated failed attempts; the current behavior is 8 failed attempts followed by a 10-minute lock. Rate-limit registration too, without permanently trapping an IP address.
+- No public owner registration. Owner initialization must be an explicitly documented local/setup operation, never a hardcoded default password or public endpoint.
+
+Recovery: the active user flow is contact an authorized admin for a temporary password. Do not expose email-code reset or pretend email delivery is configured. Keep email self-service recovery disabled unless separately enabled later. Explain: لو نسيت كلمة المرور، كلم المشرف لاستعادة الدخول.
+
+Sessions:
+- Persistent server-tracked sessions with creation time, device/browser description and last real activity.
+- Expire after two hours of inactivity. Background polling must not keep an otherwise idle session alive.
+- Revalidate session status and role on the server.
+- Logout current session; revoke one specific session; revoke all other sessions.
+- Password resets revoke all sessions for the target user. A self-service password change requires the current password and must invalidate stale sessions, retaining or reissuing only the current session deliberately.
+- On unauthorized/expired responses clear the local authenticated state and return to login with an understandable message.
+
+6. HOME AND STUDY RESOURCES
+
+Home screen:
+- Greeting: أهلًا بعودتك followed by the user's display name.
+- Subtitle: كل ما تحتاجه لدراستك في مكان واحد.
+- Search field: دوّر على مادة…
+- Four quick actions: المواد الدراسية، المحادثة، مجالس المذاكرة، حسابي.
+- Subject count and a responsive grid of subject cards with book icons, configurable accent colors and resource counts.
+- Search filters subjects immediately without destroying the underlying list.
+
+Subjects contain ordered sections; sections contain ordered resource links. Example generic sections: ملخصات، محاضرات، مصادر. All actual subjects and links are editable data, not hardcoded UI.
+
+Subject screen:
+- Subject name, back navigation and ordered collapsible sections.
+- Resource title, type indicator, optional note, safe external-link affordance and relevant metadata.
+- Empty section state: لسه مفيش محتوى في القسم ده.
+- Support links to documents, videos, PDF resources, Drive, Telegram and ordinary web sources. Validate protocols and open external sites safely. Never execute user-entered HTML or script URLs.
+- Keep resource links distinct from chat-file uploads.
+- Administration tools appear only for the relevant roles.
+
+Content administration:
+- إضافة مادة means adding a resource/content link inside an existing subject, not creating a new academic subject. Use helper copy to make this distinction obvious.
+- Fields: المادة، القسم، العنوان، الرابط، ملاحظة (اختياري)، نوع المحتوى.
+- إضافة مادة دراسية جديدة creates a subject with name, accent color and icon.
+- إضافة قسم لمادة creates a section within a selected subject.
+- Resource menu supports edit title/link/type/note, move to another section of the same subject, move up/down within its section and delete with confirmation.
+- New resources appear first in the selected section; maintain a deterministic persisted ordering.
+- Subject/section ordering must be stable.
+- Deleting a subject warns about dependent sections/resources and performs consistent transactional cleanup. Deleting a nonempty section must explicitly offer a safe move or clearly confirmed cascade; never silently orphan resources.
+- Refresh affected views after successful edits without requiring a full reload.
+
+7. CLASS CHAT
+
+One shared class discussion area with three independent channels:
+- إعلانات: only admin and owner can publish; members can read.
+- أسئلة: approved members, admins and owner can publish when unlocked.
+- عام: approved members, admins and owner can publish when unlocked.
+
+Layout:
+- Channel tabs with unread badges.
+- Search button and members/media button.
+- Admin-only المحادثة مفتوحة / المحادثة مقفولة control.
+- Typing indicator, history-access banner, message list, reply/edit bar and bottom composer.
+- Date separators such as اليوم and أمس with local clock formatting.
+- Distinct sent/received bubbles, sender display name/avatar, role indicator where useful, timestamp, edited marker, reactions and delivery/read status.
+- Linkify text safely without rendering raw HTML. Preserve line breaks and mixed-direction filenames/URLs.
+- Preserve scroll position while reading older content. Autoscroll only when already near the bottom or after the user's own send. Otherwise show رسايل جديدة with a jump-to-bottom action.
+- Load an initial recent page (about 50 messages), support earlier-history pagination and incremental updates. Avoid duplicate messages after retries/reconnects. Apply edits, deletions and reaction changes to already displayed messages.
+- Use real-time updates when supported or sensible adaptive polling that pauses/slows in hidden tabs and recovers after reconnects. No busy loops or full-list redraw on every keystroke.
+
+Composer:
+- Text up to 2,000 characters.
+- Emoji picker, attachment button, image button and microphone when empty; send button when there is text.
+- Enter sends on desktop; keep mobile composition and Arabic input method behavior safe.
+- Reply preview with sender and excerpt and a clear cancel action.
+- Edit mode clearly distinguished from reply mode.
+- Disable sending in announcements for members or in locked channels, with an explanation instead of a nonworking button.
+
+Emoji/stickers:
+- Emoji categories: وجوه، إشارات، قلوب، دراسة، أشياء.
+- ستيكرز is a simple large standalone emoji/sticker-style message picker. Do not imply a custom uploaded sticker library exists.
+- Emoji selection inserts at the caret; sticker selection sends a standalone message in the current channel, subject to the same permissions.
+
+Message actions:
+- Long press on touch and context menu on desktop; also provide an accessible action button.
+- Reply, copy text, react, edit own text, hide for me, delete for everyone where permitted, and message info where permitted.
+- Swipe-to-reply can supplement, not replace, accessible controls.
+- One reaction per user per message. Tapping the same reaction removes it; choosing another replaces it. Show counts and whether the current user reacted.
+- A user may edit their own nondeleted message text; never edit another user's text.
+- حذف عندي hides the message only for the current user.
+- حذف عند الكل creates a tombstone and removes access to its attachments and reactions. Regular users may do this only for their own messages less than 48 hours old. Admins/owner can moderate others' messages. For parity, the 48-hour rule still applies to an admin's own message when using this ordinary delete action.
+- Owner-only حذف نهائي removes the message from normal chat without a visible tombstone. Do not call this a promise that backups or audit records are erased. Confirmation must explain its scope.
+- Replies to deleted or inaccessible messages must not reveal the old text or attachments.
+
+Receipts:
+- sent, delivered and read states, with distinguishable icons and accessible labels.
+- Persist per-recipient delivery/read timestamps and per-user per-channel read position.
+- Message info lists delivered/read recipients and timestamps only to the sender or authorized admin/owner.
+- Do not mark a message read solely because a hidden tab fetched it. Read when the relevant channel is visible and the message has been viewed.
+- Unread counts exclude own messages, deleted messages, hidden-for-me messages and inaccessible history.
+
+8. HISTORY ACCESS IS A SEPARATE PERMISSION
+
+A newly approved member can see messages from their account creation time onward, not all historical chat. Admins and owner have full history. A member may request older history using طلب الرسائل القديمة / طلب الوصول للرسائل القديمة.
+
+Track pending, approved and rejected request states, prevent duplicate pending requests, and display the current state. Admin approval of registration does not approve history access. Admin history approval sets the separate history-granted flag.
+
+Apply the same history rules server-side to every access path: channel lists, older pages, search, reply excerpts, media gallery, attachment streaming/downloads, reactions, receipts and message info. Guessing an old message or attachment identifier must not bypass the restriction. A visually hidden control is not an access check.
+
+9. UPLOADS, AUDIO AND DOWNLOADS
+
+Support common safe image formats, PDF, browser-recorded audio, supported common audio formats and actual Office documents such as DOCX, PPTX and XLSX. Do not accept arbitrary executables or mislabeled archives as Office documents.
+
+- Maximum ordinary upload: 15,000,000 bytes.
+- Maximum voice upload: 12,000,000 bytes.
+- Detect real content type from file content and validate structure where needed, not only extension or browser MIME.
+- Validate supported Office container structure and return the exact Office MIME type; a PPTX must not be served merely as application/zip.
+- Sanitize filenames and preserve valid Arabic filenames with correct response encoding.
+- Upload ownership and attachment binding must be enforced. Users cannot attach another person's private upload by guessing its key. Only approved users can upload.
+- For images, provide sensible client-side resizing/compression, around a 1,600 px longest side for chat and smaller appropriate avatars, while preserving orientation and usability.
+- Render images inline in chat. Clicking opens a full-screen image viewer with close and تحميل actions, caption and safe escape/back behavior.
+- Render other files as clear cards with type, filename, size and download action.
+- Voice recording uses microphone permission, a visible timer, cancel and send controls. Stop media tracks after recording or cancellation. Maximum duration 15 minutes. Clearly indicate when the duration cap stops/sends the recording. Denied permission, unsupported browser and interrupted upload need usable errors.
+- Audio messages have play/pause, progress/duration and no unexpected autoplay.
+
+Download reliability is a required clean-build improvement. Do not reproduce a known failure where an error response gets saved with a PDF/PPTX filename:
+- Obtain fresh authorized asset access immediately before use.
+- Check HTTP success, allowed content type, expected size and complete body before saving a Blob.
+- Never download a JSON/HTML error page as if it were the requested file.
+- Expired access can be refreshed once safely, then show an explicit retry state.
+- Use correct Content-Type, Content-Disposition and Content-Length where known, and private cache policy appropriate to protected files.
+- Support a visible حفظ الملف fallback for browsers that block automatic downloads.
+- Enforce timeout/cancellation and report incomplete transfers.
+- Test downloaded PDF/Office bytes by parsing the actual result, not just checking the response code.
+
+All attachment access must be authenticated or use short-lived user-scoped access links that still enforce approval, visibility and history rules. Never expose permanent public attachment URLs. Expiring links should refresh without breaking old messages. Deleting a message or revoking access must invalidate future access. Storage may use an object store or ordered chunks, but reassembly must verify complete sequence and expected byte length.
+
+10. MEMBERS, MEDIA AND PUBLIC PROFILES
+
+Entry from chat: الأعضاء والوسائط.
+Tabs: الأعضاء and الوسائط.
+
+Members:
+- Search by display name/username, visible count and sorted list: owner, admins, then members.
+- Avatar or generated initials, display name and role badge مالك / مشرف / عضو.
+- Clicking opens a profile with avatar, name, username, role, bio, join date and message count.
+- Never show private email or account recovery fields to ordinary members.
+- Admin/owner tools appear only for permitted target accounts.
+
+Media:
+- Grid of accessible image attachments from chat, with loading, empty and retry states.
+- Filter out hidden/deleted/inaccessible history and files that are not images.
+- Open the same image viewer used in chat.
+
+11. ACCOUNT SETTINGS
+
+حسابي screen contains:
+- Current profile identity, role badge and join date.
+- الاسم الظاهر, explanation that classmates see it, and حفظ الاسم.
+- اسم المستخدم, clear reminder that it is used to log in, and حفظ اسم المستخدم. Enforce uniqueness/format and warn to retain the new login identifier.
+- الصورة والبايو: upload/change/remove avatar, bio up to 160 characters, and explicit save action. Explain these are visible to members.
+- Email remains privately stored; do not surface an enabled self-service email/recovery card while email recovery is disabled. Authorized admins may manage relevant emails using their private administrative tools.
+- تغيير كلمة المرور: current, new and confirm fields.
+- الأجهزة / جلسات الدخول: device/browser label, creation/last activity, current session marker, revoke individual session and تسجيل الخروج من كل الأجهزة التانية.
+- تسجيل الخروج.
+
+Validate before save, show busy/error/success states and preserve unsaved input on recoverable errors. Update visible user identity consistently after profile changes. Check avatar type and ownership; do not accept arbitrary file keys.
+
+12. ADMINISTRATION AND ROLE RULES
+
+Hide the الإدارة navigation from members, and enforce every rule again on the server. The owner is protected; no public UI can create a new owner, change the owner's role, remove the owner or reset the owner's password through another account.
+
+Administration screen uses clear accordion sections:
+- طلبات الانضمام: pending accounts with identifying registration details, قبول and رفض. Rejection removes the pending account safely.
+- طلبات الرسائل القديمة: separate history requests with independent accept/reject controls.
+- إضافة مادة: new resource link form.
+- إضافة مادة دراسية جديدة.
+- إضافة قسم لمادة.
+- Owner-only كود التطبيق / تحميل الأرشيف optional capability, described below.
+
+Show combined pending-count badges for admins and owner. Empty state: لا توجد طلبات جديدة. Errors must offer retry rather than falsely implying no requests exist.
+
+Member management permissions:
+- Admin and owner can promote/demote another non-owner account between member and admin. They cannot change their own role. Preserve this product rule even though admin-to-admin role management is more permissive than some systems.
+- Admin can remove an ordinary member. Only owner can remove an admin. No one can remove themselves or the owner.
+- Removal immediately revokes sessions and access and consistently cleans user-linked private records. Preserve existing chat history safely with a neutral former-member identity if needed; do not corrupt replies or delete the whole class history accidentally.
+- Admin can privately edit a member's email and set a temporary password for a member. Only owner can do those operations for an admin. No administrative reset of the owner's password.
+- Temporary passwords satisfy the password limits, are handled without logging plaintext, and revoke all target sessions. Use a confirmation with the target identity; do not send passwords into public chat.
+- Role or approval changes take effect immediately, including cached authorization and existing sessions.
+
+Chat management:
+- Admin/owner publish announcements, lock/unlock member sending and moderate messages.
+- Lock affects ordinary member sending, not admin/owner publishing.
+- Confirm destructive actions and state the target and consequence clearly.
+
+Owner archive capability:
+- If an application-source archive export is included, it is exclusively owner-accessible through a separately authorized server-side export function.
+- Generate only a sanitized copy of the fresh application's own source, excluding secrets, personal data, database exports, private uploads, logs and local environment files.
+- If safe source export is not available in the chosen environment, show an honest unavailable/configuration state or omit the control until implemented. Never supply a fake archive or expose a static archive URL to everyone.
+
+13. MAJALIS STUDY MEETING
+
+مجالس / مجالس المذاكرة is a shared audio/video study room, separate from chat voice notes.
+
+Entry card:
+- مجلس المذاكرة
+- غرفة صوت وصورة للمذاكرة سوا
+- انضم للمجلس
+- افتح في تاب جديد
+
+Use a configurable meeting provider with a browser-based embedded API when available. Do not hardcode an existing class room or production service address. Joining requires explicit user action and device permission. Do not join or activate camera/microphone automatically at login or page load.
+
+When joined, navigating to materials/chat minimizes the active meeting to a movable/responsive floating panel; allow expand and close/leave without losing the rest of app state. Keep the floating panel clear of composer/navigation and within viewport bounds. Opening externally must work as an alternative when embedding is blocked. Closing must leave the meeting and release device resources. Optional screen-wake support must fail gracefully. Meeting-provider unavailable and permission-denied states must be truthful and actionable.
+
+14. DATA MODEL
+
+Implement equivalent normalized entities; field names can follow the chosen ORM conventions. Use migrations, appropriate foreign keys/indexes and consistent UTC storage with localized display times. Do not seed real users or private content.
+
+- User: id, displayName, unique normalized username, private email, passwordHash, role enum member/admin/owner, approval status, historyGranted boolean, optional bio, optional avatar asset reference, createdAt, updatedAt.
+- Session: id, userId, securely protected session reference, device/browser description, createdAt, lastActivityAt, expiresAt/revokedAt. Never return secret session material in profile/member APIs.
+- AuthAttempt/RateLimit: bounded identifier hash or appropriate rate-limit key, attempts, window start, lockedUntil, expiry. No permanent lockouts from unbounded counters.
+- Subject: id, name, accentColor, iconName, sortOrder, createdAt.
+- Section: id, subjectId, label, sortOrder.
+- Material: id, subjectId, sectionId, title, kind, URL, optional note, creatorId, createdAt, updatedAt, sortOrder.
+- Channel: fixed identifiers announcements/questions/general, Arabic labels; can be an enum rather than a table.
+- Message: id, channel, senderId, display-name snapshot if needed, body, optional replyToId, optional audioAssetId, optional fileAssetId, filename snapshot, createdAt, editedAt, deletedAt, deletedById. A message must have valid nonempty text or an allowed attachment.
+- MessageHide: userId + messageId unique composite, hiddenAt.
+- Reaction: userId + messageId unique composite, emoji, createdAt/updatedAt.
+- ChannelRead: userId + channel unique composite, highestReadMessageId, updatedAt. Read positions only advance.
+- Receipt: messageId + recipientId unique composite, deliveredAt, readAt.
+- Typing: userId + channel, lastActivityAt; short expiry around six seconds.
+- HistoryRequest: id, unique userId/current request, status pending/approved/rejected, createdAt, decidedById, decidedAt.
+- Asset: id, uploaderId, detectedMime, originalSafeName, byteSize, kind, storageReference, createdAt, finalizedAt, attachment visibility binding. If chunked, AssetChunk has assetId + sequence unique and byte payload/checksum as needed.
+- AppSetting: key/value for chat lock and configurable branding/meeting settings, with restricted write access.
+- Optional AdminAudit: actor, action, target identifier, timestamp and safe metadata. Never log plaintext passwords, session secrets, raw private file content or secret configuration.
+
+Index message channel/order/time, sender, replies, resource subject/section/order, request status and user lookups. Use transactional operations for destructive changes, ordered moves, reset/revocation and upload finalization. Prevent orphaned assets, broken ordering and partial operations.
+
+15. SECURITY, RELIABILITY AND PERFORMANCE
+
+- Every API action validates session, approval, role, target permissions, object ownership and visibility. UI hiding alone is insufficient.
+- Parameterized database queries and schema validation; safe escaping, safe links and no untrusted HTML rendering.
+- Correct origin/CSRF protection for the chosen session mechanism, secure browser session handling and no private authentication material in URLs or logs.
+- Enforce size limits before buffering large request bodies. Validate file signatures, image safety and supported document structures. Do not trust client MIME declarations.
+- Public responses must not leak password hashes, private emails, hidden message bodies, old-history attachments or internal exception details.
+- Cache only content safe for the relevant audience. No shared cache leaking per-user data. Invalidate affected resource/role state after changes.
+- Avoid per-message database loops; batch receipts/reactions and use indexed pagination. Keep reads bounded.
+- Network failures, timeouts and retries must not lose typed messages or create duplicate sends. Use idempotency for sends and important mutations.
+- Preserve draft text during recoverable errors. Never show a sent checkmark before the server accepts the message.
+- Confirm destructive actions. Make the distinction between hide, tombstone delete and owner-only final removal unambiguous.
+- Recheck permissions immediately after role/account changes and protect direct object URLs.
+- Default to privacy. No real people, production messages or real user email addresses in seed data, screenshots, comments or tests.
+
+16. PWA AND ACCESSIBILITY
+
+Provide an installable PWA manifest with original neutral icons and an appropriate app-shell caching strategy. Offline shell availability does not mean chat sends succeeded. Show offline/reconnecting state. Do not silently queue destructive operations offline. Do not cache protected files publicly or serve stale private API responses after logout. Handle app updates without silently discarding unsaved input.
+
+Use semantic forms and buttons, associated labels, keyboard navigation, visible focus, screen-reader names for icon controls, accessible dialogs with focus trapping/restoration and Escape dismissal where safe. Touch targets should be around 44 px. Do not encode status only in color. Test Arabic screen readers and mixed text direction. Respect safe areas, reduced motion and zoom.
+
+17. ACCEPTANCE TESTS
+
+Before declaring completion, test the actual app and fix failures:
+
+A. Auth: registration validation; duplicate username/name; lowercase username login; pending account blocked; approval enables access; invalid-login lock expires; disabled email recovery remains hidden.
+B. Sessions: individual revoke, other-session revoke, logout, idle expiry unaffected by polling, password reset revocation and immediate role changes.
+C. Roles: test member/admin/owner against every sensitive server action, including direct requests with forged UI state. Owner protections and admin-on-admin boundaries must match the rules above.
+D. Resources: subject search; ordered sections/resources; add/edit/move/reorder/delete; invalid URL blocked; empty/error/retry states; dependent cleanup without orphans.
+E. Chat: all channels; announcements restriction; lock behavior; send/retry without duplicates; reply, edit, reactions, hide, 48-hour boundary, tombstones, owner final removal; unread and receipts.
+F. History privacy: a newly approved member cannot retrieve older text, reply previews, search results, media, file/audio bytes or receipt details through any alternate route; approved history request enables the intended scope.
+G. Files: valid image/PDF/audio/DOCX/PPTX/XLSX round trips; oversize, mislabeled, truncated and unauthorized files rejected; MIME and Arabic filenames correct; expired access refresh; JSON/HTML errors never saved as documents; downloaded Office/PDF bytes open correctly.
+H. Media/account: avatar changes and removal, bio limit, public-profile privacy, username change, current-password verification and target-specific administrative recovery.
+I. Meeting: explicit join, permission denial, external fallback, minimize/expand, navigation while active and clean leave/resource release.
+J. Visual: inspect real rendered screens, not only code, at approximately 360 px mobile, tablet and 1440 px desktop in all four themes. Verify Arabic text, icons, contrast, scroll behavior, bottom composer/keyboard/sidebar geometry, long names, long filenames, empty lists, loading/error panels and no horizontal overflow.
+K. Persistence: reload and sign in from a fresh session; confirm data is genuinely persisted and unauthorized users remain blocked. Offline must not masquerade as a successful write.
+
+18. REQUIRED OUTPUT
+
+Build the complete application with all the screens and workflows above. Provide a concise README covering local setup, data model, role rules, fictional demo data, tests and which optional external integrations need configuration. Do not include real credentials, hardcoded passwords, existing infrastructure information or private data. Provide the runnable code and tests. Clearly distinguish implemented features from any integration awaiting configuration. Do not deploy or contact an existing service on my behalf.
+
+Prioritize functional correctness, Arabic usability and consistent navy/gold design over decorative effects. The final result should feel like one finished, reliable product rather than separate demo pages.
