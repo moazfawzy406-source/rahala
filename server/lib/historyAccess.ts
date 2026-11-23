@@ -61,6 +61,45 @@ export function canViewerAccessAsset(
   }
 
   if (assetRow.binding_type === 'chat_file' || assetRow.binding_type === 'chat_audio') {
+    if (assetRow.binding_id?.startsWith('conv:')) {
+      const convMsgId = Number(assetRow.binding_id.slice(5));
+      if (!Number.isFinite(convMsgId)) return false;
+      const msg = db
+        .prepare(
+          `SELECT cm.id, cm.conversation_id, cm.created_at, cm.deleted_at,
+                  mem.cleared_before_at, c.disappearing_hours
+           FROM conversation_messages cm
+           JOIN conversation_members mem
+             ON mem.conversation_id = cm.conversation_id AND mem.user_id = ?
+           JOIN conversations c
+             ON c.id = cm.conversation_id
+           WHERE cm.id = ?`
+        )
+        .get(viewer.id, convMsgId) as
+        | {
+            id: number;
+            conversation_id: string;
+            created_at: number;
+            deleted_at: number | null;
+            cleared_before_at: number;
+            disappearing_hours: number;
+          }
+        | undefined;
+      if (!msg || msg.deleted_at !== null) return false;
+      if (msg.created_at < msg.cleared_before_at) return false;
+      if (
+        msg.disappearing_hours > 0 &&
+        msg.created_at < Date.now() - msg.disappearing_hours * 3_600_000
+      ) {
+        return false;
+      }
+      const hidden = db
+        .prepare('SELECT 1 FROM conversation_message_hides WHERE user_id = ? AND message_id = ?')
+        .get(viewer.id, msg.id);
+      if (hidden) return false;
+      return true;
+    }
+
     const msgId = Number(assetRow.binding_id);
     if (!Number.isFinite(msgId)) return false;
     const msg = db

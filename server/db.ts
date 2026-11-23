@@ -379,6 +379,96 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE majalis_rooms ADD COLUMN mute_on_entry INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 9,
+    name: 'whatsapp_conversations_and_encryption',
+    sql: `
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK(kind IN ('dm', 'group')),
+        title TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        creator_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        wrapped_key TEXT NOT NULL,
+        key_fingerprint TEXT NOT NULL,
+        only_admins_send INTEGER NOT NULL DEFAULT 0,
+        disappearing_hours INTEGER NOT NULL DEFAULT 0,
+        pinned_message_id INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conversations_updated
+        ON conversations(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS conversation_members (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('admin', 'member')) DEFAULT 'member',
+        highest_read_message_id INTEGER NOT NULL DEFAULT 0,
+        muted_notifications INTEGER NOT NULL DEFAULT 0,
+        cleared_before_at INTEGER NOT NULL DEFAULT 0,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id, user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conv_members_user
+        ON conversation_members(user_id, conversation_id);
+
+      CREATE TABLE IF NOT EXISTS conversation_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        sender_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        sender_name_snapshot TEXT NOT NULL,
+        cipher_body TEXT NOT NULL DEFAULT '',
+        reply_to_id INTEGER REFERENCES conversation_messages(id) ON DELETE SET NULL,
+        audio_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+        file_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+        filename_snapshot TEXT,
+        idempotency_key TEXT,
+        created_at INTEGER NOT NULL,
+        edited_at INTEGER,
+        deleted_at INTEGER,
+        deleted_by_id TEXT REFERENCES users(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conv_messages_conv_id
+        ON conversation_messages(conversation_id, id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_messages_idempotency
+        ON conversation_messages(sender_id, conversation_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL AND sender_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS conversation_message_hides (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+        hidden_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, message_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_reactions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, message_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_receipts (
+        message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+        recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        delivered_at INTEGER,
+        read_at INTEGER,
+        PRIMARY KEY (message_id, recipient_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_starred (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+        starred_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, message_id)
+      );
+    `,
+  },
 ];
 
 export function openDatabase(dbPath: string): RahhalaDb {

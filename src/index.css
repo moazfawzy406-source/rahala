@@ -137,7 +137,7 @@ body {
   background-attachment: fixed;
   color: var(--text-primary);
   line-height: 1.65;
-  overflow-x: hidden;
+  overflow-x: clip;
   -webkit-font-smoothing: antialiased;
 }
 

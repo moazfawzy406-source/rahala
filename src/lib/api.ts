@@ -87,9 +87,8 @@ export async function apiRequest<T>(
   });
 
   const contentType = res.headers.get('content-type') || '';
-  const data = contentType.includes('application/json')
-    ? await res.json().catch(() => ({}))
-    : {};
+  const isJson = contentType.toLowerCase().includes('application/json');
+  const data = isJson ? await res.json().catch(() => null) : null;
 
   if (!res.ok) {
     const errMsg =
@@ -103,6 +102,14 @@ export async function apiRequest<T>(
       }
     }
     throw new ApiError(errMsg, res.status, typeof data?.code === 'string' ? data.code : undefined);
+  }
+
+  if (res.status === 204) {
+    return {} as T;
+  }
+
+  if (!isJson || data === null || typeof data !== 'object') {
+    throw new ApiError('تعذر قراءة استجابة الخادم، أعد المحاولة', res.status || 502);
   }
 
   return data as T;

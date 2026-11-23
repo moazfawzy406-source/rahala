@@ -50,8 +50,8 @@ export function CommandPalette({
     setMaterials([]);
     setActiveIndex(0);
     const t = window.setTimeout(() => inputRef.current?.focus(), 20);
-    apiRequest<{ subjects: SubjectRecord[] }>('/api/resources/subjects', { background: true })
-      .then((res) => setSubjects(res.subjects))
+    apiRequest<{ subjects?: SubjectRecord[] }>('/api/resources/subjects', { background: true })
+      .then((res) => setSubjects(Array.isArray(res?.subjects) ? res.subjects : []))
       .catch(() => {});
     return () => window.clearTimeout(t);
   }, [open]);
@@ -66,11 +66,11 @@ export function CommandPalette({
     }
     setSearching(true);
     const timer = window.setTimeout(() => {
-      apiRequest<{ results: MaterialSearchResult[] }>(
+      apiRequest<{ results?: MaterialSearchResult[] }>(
         `/api/resources/search?q=${encodeURIComponent(trimmed)}`,
         { background: true }
       )
-        .then((res) => setMaterials(res.results))
+        .then((res) => setMaterials(Array.isArray(res?.results) ? res.results : []))
         .catch(() => setMaterials([]))
         .finally(() => setSearching(false));
     }, 180);

@@ -8,6 +8,7 @@ import { createAssetsRouter } from './routes/assets.ts';
 import { createAuthRouter } from './routes/auth.ts';
 import { createChallengesRouter } from './routes/challenges.ts';
 import { createChatRouter } from './routes/chat.ts';
+import { createConversationsRouter } from './routes/conversations.ts';
 import { createMajalisRouter } from './routes/majalis.ts';
 import { createMembersRouter } from './routes/members.ts';
 import { createRemindersRouter } from './routes/reminders.ts';
@@ -43,6 +44,7 @@ export function createRahhalaApp(overrides?: Partial<RahhalaConfig>): RahhalaSer
   app.use('/api', createAuthRouter(db, config, hub));
   app.use('/api', createResourcesRouter(db, config));
   app.use('/api', createChatRouter(db, config, hub));
+  app.use('/api', createConversationsRouter(db, config, hub));
   app.use('/api', createMembersRouter(db, config));
   app.use('/api', createRemindersRouter(db, config, hub));
   app.use('/api', createChallengesRouter(db, config, hub));

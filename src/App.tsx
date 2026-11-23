@@ -146,8 +146,10 @@ export default function App() {
           }
         ),
       ]);
-      setConfig(cfgRes);
-      setUser(meRes ? meRes.user : null);
+      if (cfgRes && typeof cfgRes.brandName === 'string') {
+        setConfig(cfgRes);
+      }
+      setUser(meRes?.user ?? null);
     } catch (err) {
       setBootError(err instanceof ApiError ? err.message : 'تعذر الاتصال بالخادم');
     } finally {
@@ -163,11 +165,13 @@ export default function App() {
     if (!user) return;
     try {
       const res = await apiRequest<{
-        counts: Record<ChannelId, number>;
-        total: number;
+        counts?: Record<ChannelId, number>;
+        total?: number;
+        totalAll?: number;
       }>('/api/chat/unread', { background: true });
-      setUnreadCounts(res.counts);
-      setUnreadTotal(res.total);
+      if (res?.counts) setUnreadCounts(res.counts);
+      if (typeof res?.totalAll === 'number') setUnreadTotal(res.totalAll);
+      else if (typeof res?.total === 'number') setUnreadTotal(res.total);
     } catch {
       // ignore background error
     }
@@ -179,10 +183,12 @@ export default function App() {
       return;
     }
     try {
-      const res = await apiRequest<{ totalPendingCount: number }>('/api/admin/requests', {
+      const res = await apiRequest<{ totalPendingCount?: number }>('/api/admin/requests', {
         background: true,
       });
-      setAdminPendingCount(res.totalPendingCount);
+      if (typeof res?.totalPendingCount === 'number') {
+        setAdminPendingCount(res.totalPendingCount);
+      }
     } catch {
       // ignore
     }
@@ -190,8 +196,8 @@ export default function App() {
 
   const refreshCurrentUser = useCallback(async () => {
     try {
-      const res = await apiRequest<{ user: AuthUser }>('/api/auth/me', { background: true });
-      setUser(res.user);
+      const res = await apiRequest<{ user?: AuthUser }>('/api/auth/me', { background: true });
+      if (res?.user) setUser(res.user);
     } catch {
       // handled by unauthorized callback if expired
     }
@@ -419,7 +425,7 @@ export default function App() {
 
         {/* Top Header */}
         {!isTheaterActive && (
-        <header className="sticky top-0 z-30 h-14 border-b border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2">
+        <header className="sticky top-0 z-30 shrink-0 h-14 border-b border-[var(--glass-border)] bg-[var(--bg-nav)] backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             {activeTab === 'subjects' && selectedSubjectId && (
               <button
@@ -510,12 +516,12 @@ export default function App() {
         </header>
         )}
 
-        {/* Main Shell: Desktop RTL Sidebar + Content */}
+        {/* Main Shell: Desktop RTL Sticky Sidebar + Content */}
         <div className="flex-1 flex min-h-0">
           {!isTheaterActive && (
           <aside
             aria-label="التنقل الرئيسي"
-            className="hidden md:flex flex-col w-60 shrink-0 border-l border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl p-3 gap-1.5"
+            className="hidden md:flex flex-col w-60 shrink-0 self-start sticky top-14 h-[calc(100dvh-3.5rem)] overflow-y-auto border-l border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl p-3 gap-1.5"
           >
             {navItems.map((item) => {
               const active = activeTab === item.id;
@@ -554,11 +560,11 @@ export default function App() {
           )}
 
           <main
-            className={`flex-1 min-w-0 px-3 sm:px-6 mx-auto w-full ${
+            className={`flex-1 min-w-0 px-2.5 sm:px-5 mx-auto w-full ${
               isTheaterActive
                 ? 'max-w-[1520px] py-3 sm:py-4'
                 : activeTab === 'chat'
-                ? 'max-w-7xl py-3 sm:py-4 pb-16 md:pb-4'
+                ? 'max-w-[1440px] py-2 sm:py-3 pb-16 md:pb-3'
                 : 'max-w-6xl py-4 sm:py-6 pb-24 md:pb-6'
             }`}
           >

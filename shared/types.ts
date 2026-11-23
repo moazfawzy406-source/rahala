@@ -424,3 +424,89 @@ export interface MaterialSearchResult {
   subjectColor: string;
   sectionLabel: string;
 }
+
+export type ConversationKind = 'dm' | 'group';
+export type ConversationMemberRole = 'admin' | 'member';
+
+export interface ConversationPeerSummary {
+  id: string;
+  displayName: string;
+  username: string;
+  role: UserRole;
+  avatarAssetId: string | null;
+  bio: string;
+}
+
+export interface ConversationMemberInfo {
+  userId: string;
+  displayName: string;
+  username: string;
+  userRole: UserRole;
+  avatarAssetId: string | null;
+  role: ConversationMemberRole;
+  joinedAt: number;
+}
+
+export interface ConversationPinnedSummary {
+  id: number;
+  senderName: string;
+  excerpt: string;
+  createdAt: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  kind: ConversationKind;
+  title: string;
+  description: string;
+  encrypted: true;
+  keyFingerprint: string;
+  peer: ConversationPeerSummary | null;
+  memberCount: number;
+  myRole: ConversationMemberRole;
+  onlyAdminsSend: boolean;
+  disappearingHours: DisappearingHours;
+  mutedNotifications: boolean;
+  pinnedMessage: ConversationPinnedSummary | null;
+  lastMessagePreview: string;
+  lastMessageAt: number;
+  lastMessageSenderName: string | null;
+  lastMessageIsMine: boolean;
+  lastMessageReceiptStatus: ReceiptStatus | null;
+  unreadCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationMessage {
+  id: number;
+  conversationId: string;
+  senderId: string | null;
+  senderName: string;
+  senderUsername: string | null;
+  senderRole: UserRole | null;
+  senderAvatarAssetId: string | null;
+  body: string;
+  encrypted: true;
+  replyTo: ReplyPreview | null;
+  audioAttachment: MessageAttachment | null;
+  fileAttachment: MessageAttachment | null;
+  createdAt: number;
+  editedAt: number | null;
+  deletedAt: number | null;
+  reactions: ReactionSummary[];
+  receiptStatus: ReceiptStatus | null;
+  starredByMe?: boolean;
+  canDeleteForEveryone: boolean;
+  canEdit: boolean;
+  canViewInfo: boolean;
+}
+
+export interface ConversationUnreadSummary {
+  counts: Record<ChannelId, number>;
+  total: number;
+  dmUnread: number;
+  groupUnread: number;
+  totalAll: number;
+}
+

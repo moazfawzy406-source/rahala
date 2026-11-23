@@ -577,7 +577,53 @@ export function createChatRouter(
     }
 
     const total = counts.announcements + counts.questions + counts.general;
-    res.json({ counts, total });
+
+    const exactRows = db
+      .prepare(
+        `SELECT c.kind, c.id, c.disappearing_hours, mem.highest_read_message_id, mem.cleared_before_at
+         FROM conversation_members mem
+         JOIN conversations c ON c.id = mem.conversation_id
+         WHERE mem.user_id = ?`
+      )
+      .all(viewer.id) as Array<{
+      kind: 'dm' | 'group';
+      id: string;
+      disappearing_hours: number;
+      highest_read_message_id: number;
+      cleared_before_at: number;
+    }>;
+    let dmUnread = 0;
+    let groupUnread = 0;
+    const nowTs = Date.now();
+    for (const row of exactRows) {
+      const disCut = row.disappearing_hours > 0 ? nowTs - row.disappearing_hours * 3_600_000 : 0;
+      const effCut = Math.max(row.cleared_before_at, disCut);
+      const cntRow = db
+        .prepare(
+          `SELECT COUNT(*) AS cnt
+           FROM conversation_messages cm
+           WHERE cm.conversation_id = ?
+             AND cm.id > ?
+             AND cm.created_at >= ?
+             AND cm.deleted_at IS NULL
+             AND (cm.sender_id IS NULL OR cm.sender_id != ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM conversation_message_hides h
+               WHERE h.user_id = ? AND h.message_id = cm.id
+             )`
+        )
+        .get(row.id, row.highest_read_message_id, effCut, viewer.id, viewer.id) as { cnt: number };
+      if (row.kind === 'dm') dmUnread += cntRow.cnt;
+      else groupUnread += cntRow.cnt;
+    }
+
+    res.json({
+      counts,
+      total,
+      dmUnread,
+      groupUnread,
+      totalAll: total + dmUnread + groupUnread,
+    });
   });
 
   const sendMessageSchema = z.object({
@@ -1466,7 +1512,9 @@ export function createChatRouter(
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM messages').run();
       db.prepare('DELETE FROM channel_reads').run();
-      db.prepare("DELETE FROM assets WHERE binding_type IN ('chat_file', 'chat_audio')").run();
+      db.prepare(
+        "DELETE FROM assets WHERE binding_type IN ('chat_file', 'chat_audio') AND (binding_id IS NULL OR binding_id NOT LIKE 'conv:%')"
+      ).run();
       for (const ch of CHANNEL_ENUM) {
         setSetting(db, `pinned_message_${ch}`, '');
       }

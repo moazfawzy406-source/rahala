@@ -70,3 +70,96 @@ export function verifyShortToken<T extends Record<string, unknown>>(
     return null;
   }
 }
+
+export function deriveConversationMasterKey(signingSecret: string): Buffer {
+  const envKey = process.env.RAHHALA_ENCRYPTION_KEY?.trim();
+  const ikm = Buffer.from(envKey || signingSecret, 'utf8');
+  return Buffer.from(
+    crypto.hkdfSync(
+      'sha256',
+      ikm,
+      Buffer.from('rahhala-conv-salt-v1', 'utf8'),
+      Buffer.from('rahhala-conv-master-v1', 'utf8'),
+      32
+    )
+  );
+}
+
+export function computeKeyFingerprint(rawKey: Buffer, conversationId: string): string {
+  const hash = crypto
+    .createHash('sha256')
+    .update(rawKey)
+    .update(':')
+    .update(conversationId)
+    .digest();
+  let digits = '';
+  for (let i = 0; i < 30; i++) {
+    const num = hash.readUInt16BE(i % (hash.length - 1)) % 100;
+    digits += String(num).padStart(2, '0');
+  }
+  return digits.match(/.{1,5}/g)?.join(' ') ?? digits;
+}
+
+function aesGcmEncrypt(plaintext: Buffer, key: Buffer, aad?: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  if (aad) {
+    cipher.setAAD(Buffer.from(aad, 'utf8'));
+  }
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64url')}:${tag.toString('base64url')}:${encrypted.toString('base64url')}`;
+}
+
+function aesGcmDecrypt(payload: string, key: Buffer, aad?: string): Buffer {
+  const parts = payload.split(':');
+  if (parts.length !== 5 || parts[0] !== 'enc' || parts[1] !== 'v1') {
+    throw new Error('Unsupported ciphertext format');
+  }
+  const iv = Buffer.from(parts[2], 'base64url');
+  const tag = Buffer.from(parts[3], 'base64url');
+  const ciphertext = Buffer.from(parts[4], 'base64url');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  if (aad) {
+    decipher.setAAD(Buffer.from(aad, 'utf8'));
+  }
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+export function generateConversationKey(
+  masterKey: Buffer,
+  conversationId: string
+): { rawKey: Buffer; wrappedKey: string; fingerprint: string } {
+  const rawKey = crypto.randomBytes(32);
+  const wrappedKey = aesGcmEncrypt(rawKey, masterKey, `wrap:${conversationId}`);
+  const fingerprint = computeKeyFingerprint(rawKey, conversationId);
+  return { rawKey, wrappedKey, fingerprint };
+}
+
+export function unwrapConversationKey(
+  wrappedKey: string,
+  masterKey: Buffer,
+  conversationId: string
+): Buffer {
+  return aesGcmDecrypt(wrappedKey, masterKey, `wrap:${conversationId}`);
+}
+
+export function encryptMessageBody(
+  plaintext: string,
+  rawKey: Buffer,
+  aadContext: string
+): string {
+  if (!plaintext) return '';
+  return aesGcmEncrypt(Buffer.from(plaintext, 'utf8'), rawKey, aadContext);
+}
+
+export function decryptMessageBody(
+  cipherPayload: string,
+  rawKey: Buffer,
+  aadContext: string
+): string {
+  if (!cipherPayload) return '';
+  return aesGcmDecrypt(cipherPayload, rawKey, aadContext).toString('utf8');
+}
+

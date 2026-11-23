@@ -73,7 +73,15 @@ export function HomeAndSubjects({
   } | null>(() => {
     try {
       const raw = localStorage.getItem(`rahhala:last_study:${user.id}`);
-      return raw ? (JSON.parse(raw) as { subjectId: string; subjectName: string; materialTitle?: string; visitedAt: number }) : null;
+      const parsed = raw ? (JSON.parse(raw) as Partial<{ subjectId: string; subjectName: string; materialTitle?: string; visitedAt: number }>) : null;
+      return parsed && typeof parsed.subjectId === 'string' && typeof parsed.subjectName === 'string'
+        ? {
+            subjectId: parsed.subjectId,
+            subjectName: parsed.subjectName,
+            materialTitle: typeof parsed.materialTitle === 'string' ? parsed.materialTitle : undefined,
+            visitedAt: typeof parsed.visitedAt === 'number' ? parsed.visitedAt : Date.now(),
+          }
+        : null;
     } catch {
       return null;
     }
@@ -123,8 +131,8 @@ export function HomeAndSubjects({
     setLoading(true);
     setError(null);
     try {
-      const res = await apiRequest<{ subjects: SubjectRecord[] }>('/api/resources/subjects');
-      setSubjects(res.subjects);
+      const res = await apiRequest<{ subjects?: SubjectRecord[] }>('/api/resources/subjects');
+      setSubjects(Array.isArray(res?.subjects) ? res.subjects : []);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'تعذر تحميل المواد الدراسية');
     } finally {
@@ -136,10 +144,17 @@ export function HomeAndSubjects({
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const res = await apiRequest<{ subject: SubjectRecord; sections: SectionRecord[] }>(
+      const res = await apiRequest<{ subject?: SubjectRecord; sections?: SectionRecord[] }>(
         `/api/resources/subjects/${encodeURIComponent(id)}`
       );
-      setSubjectDetail(res);
+      if (!res?.subject) {
+        throw new Error('تعذر تحميل محتوى المادة');
+      }
+      const normalizedSections = (Array.isArray(res.sections) ? res.sections : []).map((sec) => ({
+        ...sec,
+        materials: Array.isArray(sec.materials) ? sec.materials : [],
+      }));
+      setSubjectDetail({ subject: res.subject, sections: normalizedSections });
       rememberStudyVisit(res.subject.id, res.subject.name);
     } catch (err) {
       setDetailError(err instanceof ApiError ? err.message : 'تعذر تحميل محتوى المادة');
@@ -169,11 +184,11 @@ export function HomeAndSubjects({
     }
     setMaterialSearchLoading(true);
     const id = window.setTimeout(() => {
-      apiRequest<{ results: MaterialSearchResult[] }>(
+      apiRequest<{ results?: MaterialSearchResult[] }>(
         `/api/resources/search?q=${encodeURIComponent(q)}`,
         { background: true }
       )
-        .then((res) => setMaterialSearchResults(res.results))
+        .then((res) => setMaterialSearchResults(Array.isArray(res?.results) ? res.results : []))
         .catch(() => setMaterialSearchResults([]))
         .finally(() => setMaterialSearchLoading(false));
     }, 200);
@@ -181,9 +196,10 @@ export function HomeAndSubjects({
   }, [search]);
 
   const filteredSubjects = useMemo(() => {
+    const list = Array.isArray(subjects) ? subjects : [];
     const q = search.trim().toLowerCase();
-    if (!q) return subjects;
-    return subjects.filter((s) => s.name.toLowerCase().includes(q));
+    if (!q) return list;
+    return list.filter((s) => s.name.toLowerCase().includes(q));
   }, [subjects, search]);
 
   const openEditModal = (m: MaterialRecord) => {

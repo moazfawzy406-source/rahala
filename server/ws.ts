@@ -72,6 +72,12 @@ export interface RealtimeHub {
   broadcastChatLockChanged: (locked: boolean) => void;
   broadcastGroupSettingsUpdated: () => void;
   broadcastChannelWiped: (channel: ChannelId | 'all') => void;
+  broadcastConversationListUpdated: (userIds: string[]) => void;
+  broadcastConversationMessageCreated: (conversationId: string, messageId: number, senderId: string) => void;
+  broadcastConversationMessageUpdated: (conversationId: string, messageId: number) => void;
+  broadcastConversationMessageRemoved: (conversationId: string, messageId: number) => void;
+  broadcastConversationReactionUpdated: (conversationId: string, messageId: number) => void;
+  broadcastConversationReceiptUpdated: (senderId: string, conversationId: string, messageId: number) => void;
   broadcastChallengesUpdated: () => void;
   getMajalisRoomsSnapshot: () => MajalisRoomSummary[];
   broadcastMajalisLobbyUpdated: () => void;
@@ -571,6 +577,7 @@ export function setupWebSocketHub(
         const msg = JSON.parse(raw.toString()) as {
           type?: string;
           channel?: ChannelId;
+          conversationId?: string;
           active?: boolean;
           targetUserId?: string;
           roomId?: string;
@@ -639,6 +646,33 @@ export function setupWebSocketHub(
               sendJsonSafe(client.ws, {
                 type: 'typing:updated',
                 channel: msg.channel,
+                userId: meta.userId,
+                displayName: meta.displayName,
+                active: Boolean(msg.active),
+              });
+            }
+          }
+          return;
+        }
+
+        if (msg.type === 'conv:typing' && msg.conversationId) {
+          const convId = String(msg.conversationId);
+          const isMember = db
+            .prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+            .get(convId, meta.userId);
+          if (!isMember) return;
+          const memberIds = new Set(
+            (
+              db
+                .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+                .all(convId) as Array<{ user_id: string }>
+            ).map((r) => r.user_id)
+          );
+          for (const client of clients) {
+            if (client.userId !== meta.userId && memberIds.has(client.userId)) {
+              sendJsonSafe(client.ws, {
+                type: 'conv:typing_updated',
+                conversationId: convId,
                 userId: meta.userId,
                 displayName: meta.displayName,
                 active: Boolean(msg.active),
@@ -1242,6 +1276,102 @@ export function setupWebSocketHub(
     broadcastChannelWiped(channel) {
       for (const client of clients) {
         sendToClient(client, { type: 'chat:channel_wiped', channel });
+      }
+    },
+    broadcastConversationListUpdated(userIds) {
+      const targetSet = new Set(userIds);
+      for (const client of clients) {
+        if (targetSet.has(client.userId)) {
+          sendToClient(client, { type: 'conv:list_updated' });
+        }
+      }
+    },
+    broadcastConversationMessageCreated(conversationId, messageId, senderId) {
+      if (isClosed || !db.open) return;
+      const memberIds = new Set(
+        (
+          db
+            .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+            .all(conversationId) as Array<{ user_id: string }>
+        ).map((r) => r.user_id)
+      );
+      for (const client of clients) {
+        if (memberIds.has(client.userId)) {
+          sendToClient(client, {
+            type: 'conv:message_created',
+            conversationId,
+            messageId,
+            senderId,
+          });
+        }
+      }
+    },
+    broadcastConversationMessageUpdated(conversationId, messageId) {
+      if (isClosed || !db.open) return;
+      const memberIds = new Set(
+        (
+          db
+            .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+            .all(conversationId) as Array<{ user_id: string }>
+        ).map((r) => r.user_id)
+      );
+      for (const client of clients) {
+        if (memberIds.has(client.userId)) {
+          sendToClient(client, {
+            type: 'conv:message_updated',
+            conversationId,
+            messageId,
+          });
+        }
+      }
+    },
+    broadcastConversationMessageRemoved(conversationId, messageId) {
+      if (isClosed || !db.open) return;
+      const memberIds = new Set(
+        (
+          db
+            .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+            .all(conversationId) as Array<{ user_id: string }>
+        ).map((r) => r.user_id)
+      );
+      for (const client of clients) {
+        if (memberIds.has(client.userId)) {
+          sendToClient(client, {
+            type: 'conv:message_removed',
+            conversationId,
+            messageId,
+          });
+        }
+      }
+    },
+    broadcastConversationReactionUpdated(conversationId, messageId) {
+      if (isClosed || !db.open) return;
+      const memberIds = new Set(
+        (
+          db
+            .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+            .all(conversationId) as Array<{ user_id: string }>
+        ).map((r) => r.user_id)
+      );
+      for (const client of clients) {
+        if (memberIds.has(client.userId)) {
+          sendToClient(client, {
+            type: 'conv:reaction_updated',
+            conversationId,
+            messageId,
+          });
+        }
+      }
+    },
+    broadcastConversationReceiptUpdated(senderId, conversationId, messageId) {
+      for (const client of clients) {
+        if (client.userId === senderId) {
+          sendToClient(client, {
+            type: 'conv:receipt_updated',
+            conversationId,
+            messageId,
+          });
+        }
       }
     },
     broadcastChallengesUpdated() {

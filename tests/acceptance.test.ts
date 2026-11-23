@@ -1303,7 +1303,172 @@ describe('Rahhala Full-Stack Acceptance Suite', () => {
       new Promise<void>((r) => { g2Ws.once('close', () => r()); g2Ws.close(); }),
     ]);
   });
+
+  it('M: Encrypted 1-to-1 member DMs, user-created groups, AES-256-GCM ciphertext storage, outsider isolation, and unread totals', async () => {
+    const owner = new TestClient(baseUrl);
+    const alice = new TestClient(baseUrl);
+    const bob = new TestClient(baseUrl);
+
+    const now = Date.now();
+    ctx.db
+      .prepare(
+        `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, created_at, updated_at)
+         VALUES ('usr_alice', 'أليس', 'alice_mem', 'alice@example.invalid', ?, 'member', 'approved', 0, '', ?, ?)`
+      )
+      .run(hashPassword('AlicePass123'), now, now);
+    ctx.db
+      .prepare(
+        `INSERT INTO users (id, display_name, username, email, password_hash, role, approval_status, history_granted, bio, created_at, updated_at)
+         VALUES ('usr_bob', 'بوب', 'bob_mem', 'bob@example.invalid', ?, 'member', 'approved', 0, '', ?, ?)`
+      )
+      .run(hashPassword('BobPass123'), now, now);
+
+    await owner.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'owner_one', password: 'OwnerPass123' }),
+    });
+    await alice.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'alice_mem', password: 'AlicePass123' }),
+    });
+    await bob.json('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'bob_mem', password: 'BobPass123' }),
+    });
+
+    // 1. Alice starts canonical 1-to-1 encrypted DM with Bob
+    const dmRes = await alice.json('/api/chat/conversations/dm', {
+      method: 'POST',
+      body: JSON.stringify({ targetUserId: 'usr_bob' }),
+    });
+    expect(dmRes.status).toBe(201);
+    expect(dmRes.data.conversation.kind).toBe('dm');
+    expect(dmRes.data.conversation.encrypted).toBe(true);
+    expect(dmRes.data.conversation.keyFingerprint).toMatch(/^\d{5}( \d{5}){11}$/);
+    const dmId = dmRes.data.conversation.id;
+
+    // Upload a PDF and attach to an encrypted DM message
+    const pdfUp = await alice.json('/api/assets/upload', {
+      method: 'POST',
+      headers: {
+        'X-Rahhala-Purpose': 'chat_file',
+        'X-Rahhala-Filename': encodeURIComponent('ملخص_خاص.pdf'),
+        'Content-Type': 'application/octet-stream',
+      },
+      body: new Uint8Array(makeMinimalPdf()),
+    });
+    expect(pdfUp.status).toBe(201);
+    const dmAssetId = pdfUp.data.asset.assetId;
+
+    const secretText = 'رسالة سرية جداً للمذاكرة بيننا';
+    const sendDm = await alice.json(`/api/chat/conversations/${dmId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        body: secretText,
+        fileAssetId: dmAssetId,
+        idempotencyKey: 'dm_secret_1',
+      }),
+    });
+    expect(sendDm.status).toBe(201);
+    expect(sendDm.data.message.body).toBe(secretText);
+    expect(sendDm.data.message.encrypted).toBe(true);
+    const dmMsgId = sendDm.data.message.id;
+
+    // Verify ciphertext in SQLite is encrypted with AES-256-GCM ('enc:v1:...') and has NO plaintext
+    const rawRow = ctx.db
+      .prepare('SELECT cipher_body FROM conversation_messages WHERE id = ?')
+      .get(dmMsgId) as { cipher_body: string };
+    expect(rawRow.cipher_body.startsWith('enc:v1:')).toBe(true);
+    expect(rawRow.cipher_body).not.toContain('رسالة سرية');
+
+    // Verify Bob's unread count includes dmUnread = 1
+    const bobUnread = await bob.json('/api/chat/unread');
+    expect(bobUnread.status).toBe(200);
+    expect(bobUnread.data.dmUnread).toBe(1);
+    expect(bobUnread.data.totalAll).toBeGreaterThanOrEqual(1);
+
+    // Outsider (even owner!) is strictly blocked (403) from reading DM, searching DM, or accessing DM asset
+    expect((await owner.json(`/api/chat/conversations/${dmId}/messages`)).status).toBe(403);
+    expect(
+      (
+        await owner.json(
+          `/api/chat/conversations/${dmId}/search?q=${encodeURIComponent('سرية')}`
+        )
+      ).status
+    ).toBe(403);
+    expect((await owner.json(`/api/assets/${dmAssetId}/access-token`, { method: 'POST' })).status).toBe(
+      403
+    );
+
+    // Bob can read decrypted message + mark read + access attachment
+    const bobReadMsgs = await bob.json(`/api/chat/conversations/${dmId}/messages`);
+    expect(bobReadMsgs.status).toBe(200);
+    expect(bobReadMsgs.data.messages[0].body).toBe(secretText);
+    expect(
+      (await bob.json(`/api/assets/${dmAssetId}/access-token`, { method: 'POST' })).status
+    ).toBe(200);
+    await bob.json(`/api/chat/conversations/${dmId}/read`, {
+      method: 'POST',
+      body: JSON.stringify({ highestMessageId: dmMsgId }),
+    });
+
+    // 2. Alice creates a custom encrypted group with Bob, then toggles onlyAdminsSend, adds & removes Owner
+    const grpRes = await alice.json('/api/chat/conversations/groups', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'مجموعة المراجعة الخاصة',
+        description: 'مراجعة قبل الامتحان',
+        memberIds: ['usr_bob'],
+      }),
+    });
+    expect(grpRes.status).toBe(201);
+    const grpId = grpRes.data.conversation.id;
+    expect(grpRes.data.conversation.myRole).toBe('admin');
+
+    // Set onlyAdminsSend = true -> Bob (member) gets 403, Alice (group admin) gets 201
+    expect(
+      (
+        await alice.json(`/api/chat/conversations/${grpId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ onlyAdminsSend: true }),
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await bob.json(`/api/chat/conversations/${grpId}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({ body: 'محاولة إرسال' }),
+        })
+      ).status
+    ).toBe(403);
+
+    const grpMsg = await alice.json(`/api/chat/conversations/${grpId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ body: 'أهلاً بكم في المجموعة المشفرة' }),
+    });
+    expect(grpMsg.status).toBe(201);
+
+    const bobUnreadGrp = await bob.json('/api/chat/unread');
+    expect(bobUnreadGrp.data.groupUnread).toBe(1);
+
+    // Add owner then Bob leaves group
+    expect(
+      (
+        await alice.json(`/api/chat/conversations/${grpId}/members`, {
+          method: 'POST',
+          body: JSON.stringify({ userIds: ['usr_owner'] }),
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (await bob.json(`/api/chat/conversations/${grpId}/members/usr_bob`, { method: 'DELETE' }))
+        .status
+    ).toBe(200);
+    expect((await bob.json(`/api/chat/conversations/${grpId}/messages`)).status).toBe(403);
+  });
 });
+
 
 
 
